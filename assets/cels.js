@@ -55,29 +55,51 @@ function compileCel(cel, {id = 'cel'} = {}) {
 
 // Graphite is deposited as narrow, interrupted passes. There is no opaque
 // vector ribbon underneath. The secondary pass shares the drawing gesture.
-function drawCel(c, cel, {material = 'pencil', color = '#39332e', opacity = 1} = {}) {
+// Options beyond material/color/opacity (all default to the original look):
+//   weight  line width multiplier (1.4-2 keeps pencil legible at 1080p and in thumbnails)
+//   value   darkness multiplier for each pass, clamped so a pass never exceeds full ink
+//   reveal  0..1: draw-on in stroke order, paced by stroke length; the stroke being drawn is partial
+//   fill    true: strokes with a `fill` colour ('paper' = PAL.paper) paint their closed shape first,
+//           so a front form hides the lines behind it (painter's order = stroke order)
+function drawCel(c, cel, {material = 'pencil', color = '#39332e', opacity = 1, weight = 1, value = 1, reveal = 1, fill = true} = {}) {
   if (!['pencil','ink'].includes(material)) throw new Error('Cel brush supports pencil or ink');
+  if (!(weight > 0) || !(value > 0) || !Number.isFinite(reveal)) throw new Error('drawCel: weight and value must be positive, reveal finite');
   c.save(); c.lineCap = material === 'pencil' ? 'butt' : 'round'; c.lineJoin = 'round';
-  const inheritedAlpha = c.globalAlpha * opacity;
-  for (const s of cel.strokes) {
+  const inheritedAlpha = c.globalAlpha * opacity, plan = reveal < 1 ? revealPlan(cel) : null, r = clamp(reveal, 0, 1);
+  for (const [k, s] of cel.strokes.entries()) {
+    let part = 1;
+    if (plan) { const [a, b] = plan[k]; if (r <= a) break; part = clamp((r - a) / (b - a), 0, 1); }
+    if (fill && s.fill) {
+      c.save(); c.globalAlpha = inheritedAlpha * (s.fillOpacity ?? 1) * Math.min(1, part * 3);
+      c.fillStyle = s.fill === 'paper' ? PAL.paper : s.fill; c.beginPath();
+      s.samples.forEach((a, i) => i ? c.lineTo(...a.p) : c.moveTo(...a.p)); c.closePath(); c.fill(); c.restore();
+    }
     c.strokeStyle = s.color ?? color;
-    const pencil = material === 'pencil', passes = pencil ? 3 : 1;
+    const pencil = material === 'pencil', passes = pencil ? 3 : 1, last = Math.max(1, Math.round((s.samples.length - 1) * part));
     for (let pass=0; pass<passes; pass++) {
       const spread = pencil ? (pass-1) * s.width * .30 : 0;
       const point = a => {
         const drift = (noise1(a.u*5+pass*11, s.seed)*.20 + spread) * Math.sin(Math.PI*a.u);
         return [a.p[0]-a.tangent[1]*drift, a.p[1]+a.tangent[0]*drift];
       };
-      for (let i=1; i<s.samples.length; i++) {
+      for (let i=1; i<=last; i++) {
         const a=s.samples[i-1], b=s.samples[i], tooth=hash(i*3+pass,s.seed);
         // Short gaps at low pressure, rather than random changes to the silhouette.
         if (pencil && tooth < .08 + .10*(1-Math.min(1,b.w/s.width))) continue;
         const pressure=Math.max(.04, (a.w+b.w)/2);
-        c.lineWidth = pencil ? Math.max(.18,pressure*.40) : pressure;
-        c.globalAlpha = inheritedAlpha * (s.opacity ?? 1) * (pencil ? .34 + tooth*.30 : .90);
+        c.lineWidth = (pencil ? Math.max(.18,pressure*.40) : pressure) * weight;
+        c.globalAlpha = inheritedAlpha * (s.opacity ?? 1) * Math.min(1, (pencil ? .34 + tooth*.30 : .90) * value);
         c.beginPath(); c.moveTo(...point(a)); c.lineTo(...point(b)); c.stroke();
       }
     }
   }
   c.restore();
+}
+
+// Draw-on pacing: each stroke gets a time slice that grows with the square root of its
+// length, so long contours take longer than ticks without dominating the reveal.
+function revealPlan(cel) {
+  if (cel._reveal) return cel._reveal;
+  const d = cel.strokes.map(s => .35 + Math.sqrt(s.samples.at(-1).s ?? s.samples.length * 1.3) / 8), total = d.reduce((a, b) => a + b, 0);
+  let acc = 0; return (cel._reveal = d.map(v => { const a = acc / total; acc += v; return [a, acc / total]; }));
 }

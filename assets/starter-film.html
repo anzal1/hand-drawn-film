@@ -1,0 +1,77 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>__TITLE__</title>
+<style>body{margin:0;background:#242321;display:grid;place-items:center;min-height:100vh}canvas{max-width:100vw;max-height:100vh;object-fit:contain}</style>
+<canvas id="c"></canvas>
+<script src="core.js"></script>
+<script src="studio.js"></script>
+<script src="cels.js"></script>
+<script src="sketch.js"></script>
+<script>
+'use strict';
+// Starter film: a ball hops onto a box. Replace the drawings, keep the structure:
+//   1. drawings as path data (svgCel), one raw cel per key, same stroke names across keys
+//   2. one exposure sheet (sheetBuilder) with holds, spacing charts and named marks
+//   3. a shot function that draws the set, props and the exposed drawing
+//   4. a score whose cues read the marks, so sound and picture cannot drift
+// Logical frame: __W__ x __H__ units (short side 1080). Review with render.mjs --grid / --onion and review.mjs.
+// Set the format before any file-scope constant reads W, H, CX or CY: defineFilm() runs last.
+{ const q = new URLSearchParams(location.search); setFormat({ar:q.get('ar') || '__AR__', width:+q.get('w') || __WIDTH__}); }
+const LOOK = new URLSearchParams(location.search).get('look') || '__LOOK__';
+const INK = '#342d27', OPT = {material:LOOK, color:INK, weight:LOOK === 'pencil' ? 2.2 : 1.3, value:LOOK === 'pencil' ? 1.3 : 1};
+const P = [[0,.12],[.15,.85],[.5,1],[.85,.7],[1,.1]];
+
+// ---------- 1. drawings ----------
+const GROUND = CY + 250, BOX = [CX + 230, GROUND], K = 1.45;   // K scales the set            // the box's front-bottom centre
+const SET = svgCel({
+  ground: {d:`M ${CX - Math.min(760, W / 2 - 30)} ${GROUND} L ${CX + Math.min(760, W / 2 - 30)} ${GROUND}`, width:2.2},
+  'box/front': {d:`M ${BOX[0] - 110 * K} ${GROUND} L ${BOX[0] - 110 * K} ${GROUND - 150 * K} L ${BOX[0] + 110 * K} ${GROUND - 150 * K} L ${BOX[0] + 110 * K} ${GROUND} Z`, width:2, fill:'paper', corner:.9},
+  'box/top': {d:`M ${BOX[0] - 110 * K} ${GROUND - 150 * K} L ${BOX[0] - 70 * K} ${GROUND - 190 * K} L ${BOX[0] + 150 * K} ${GROUND - 190 * K} L ${BOX[0] + 110 * K} ${GROUND - 150 * K}`, width:1.7, corner:.9},
+  'box/side': {d:`M ${BOX[0] + 150 * K} ${GROUND - 190 * K} L ${BOX[0] + 150 * K} ${GROUND - 40 * K} L ${BOX[0] + 110 * K} ${GROUND}`, width:1.6, corner:.9},
+}, {pressure:P});
+// The ball is drawn around its contact point (0, 0). sx/sy squash and stretch; lean tilts it.
+function ball(sx = 1, sy = 1, lean = 0) {
+  const r = 88, e = (x, y) => { const c = Math.cos(lean), s = Math.sin(lean), X = x * r * sx, Y = y * r * sy - r * sy; return `${(X * c - Y * s).toFixed(1)} ${(X * s + Y * c).toFixed(1)}`; };
+  return svgCel({
+    body: {d:`M ${e(-1,0)} C ${e(-1,-.56)} ${e(-.56,-1)} ${e(0,-1)} C ${e(.56,-1)} ${e(1,-.56)} ${e(1,0)} C ${e(1,.56)} ${e(.56,1)} ${e(0,1)} C ${e(-.56,1)} ${e(-1,.56)} ${e(-1,0)}`, width:2.1, fill:'paper'},
+    band: {d:`M ${e(-.96,.2)} C ${e(-.4,.5)} ${e(.4,.5)} ${e(.96,.2)}`, width:1.3, opacity:.7},
+    shine: {d:`M ${e(-.55,-.45)} C ${e(-.45,-.62)} ${e(-.25,-.72)} ${e(-.08,-.74)}`, width:1.1, opacity:.6},
+  }, {pressure:P, points:36});
+}
+const RAW = {rest:ball(), crouch:ball(1.22, .78), stretch:ball(.86, 1.2, .18), tuck:ball(.95, 1.05, .3), land:ball(1.3, .72), settle:ball(1.06, .94)};
+
+// ---------- 2. performance ----------
+// Root placement is part of each exposure. The jump arc is spaced by hand: slow at the apex.
+const A = [CX - 420, GROUND], B = [BOX[0] + 20, GROUND - 190 * K], arcAt = u => [lerp(A[0], B[0], u), lerp(A[1], B[1], u) - 300 * 4 * u * (1 - u)];
+const sb = sheetBuilder({library:RAW})
+  .key('rest', 30, A).hold('rest', 16, {boil:3, every:4})
+  .between('rest', 'crouch', spacing(2, 'slowIn'), 2, {to:A}).key('crouch', 6, A).mark('takeoff');
+const air = [.06, .16, .3, .44, .56, .68, .8, .9, .97];         // fast up, hang at the apex, fast down
+air.forEach((u, k) => sb.put(k < 2 ? 'stretch' : k > 6 ? 'stretch' : 'tuck', 2, arcAt(u)));
+sb.mark('land').key('land', 3, B).between('land', 'settle', spacing(2, 'slowIn'), 2, {from:B, to:B}).key('settle', 4, B)
+  .between('settle', 'rest', spacing(2, 'slowIn'), 2, {from:B, to:B}).hold('rest', 40, {boil:3, every:4, at:B});
+const HOP = sb.build(), IN = 1.2, T = m => IN + HOP.time(m);
+const DSET = compileCel(SET, {id:'set'});
+
+// ---------- 3. the shot ----------
+function shot(c, t) {
+  paper(c, '#f4efe3', null, 7);
+  const d = twos(t);                                           // the draw-on runs on twos
+  drawCel(c, DSET, {...OPT, reveal:sm(0, IN, d, x => x)});
+  const q = t < IN ? {drawing:HOP.drawings.rest, place:A} : HOP.at(t - IN);
+  // contact shadow: a quiet ellipse that shrinks while the ball is in the air
+  const lift = Math.max(0, (q.place[0] > BOX[0] - 110 * K ? B[1] : GROUND) - q.place[1]), sy = q.place[0] > BOX[0] - 110 * K ? B[1] : GROUND;
+  if (t > IN * .8) { c.save(); c.globalAlpha = .16 * (1 - Math.min(1, lift / 300)); c.fillStyle = INK; c.beginPath(); c.ellipse(q.place[0], sy + 2, 88 * (1 - Math.min(.6, lift / 500)), 8, 0, 0, TAU); c.fill(); c.restore(); }
+  c.save(); c.translate(...q.place); drawCel(c, q.drawing, {...OPT, reveal:t < IN ? sm(IN * .4, IN, d, x => x) : 1}); c.restore();
+}
+
+// ---------- 4. score ----------
+function score(ac, t0, out) {
+  for (let k = 0; k < 10; k++) noiseBurst(ac, out, t0, k * IN / 11, .06, .04, 20 + k);   // pencil on paper
+  note(ac, out, 392, t0, T('takeoff'), .18, 'sine', .12);
+  note(ac, out, 262, t0, T('land'), .3, 'triangle', .2); noiseBurst(ac, out, t0, T('land'), .08, .1, 3);
+}
+
+defineFilm({palette:{...PALETTES.pencilMinimal, paper:'#f4efe3'}, format:{ar:'__AR__', width:__WIDTH__}, fps:24, score,
+  timeline:[{name:'hop', dur:IN + HOP.duration, fn:shot}]});
+</script>

@@ -542,14 +542,21 @@ function defineFilm({ palette, timeline, score, format = {}, fps = 24 }) {
     else show(qs.has('frame') ? +qs.get('frame') : 0); window.__ready = true; };
   Promise.all([..._photoLoads, document.fonts.ready]).then(go).catch(e => { window.__error = String(e); console.error(e); });   // photos decode before the first frame
 }
+// downscale: halve repeatedly, then one final resize. A single large-ratio drawImage skips pixels,
+// so thin lines vanish from thumbnails that were fine in the frame.
+function downscale(src, w, h) {
+  let cur = src, cw = src.width, ch = src.height;
+  while (cw / 2 >= w && ch / 2 >= h) { const n = document.createElement('canvas'); n.width = Math.max(1, Math.round(cw / 2)); n.height = Math.max(1, Math.round(ch / 2)); n.getContext('2d').drawImage(cur, 0, 0, n.width, n.height); cur = n; cw = n.width; ch = n.height; }
+  return cur;
+}
 // gridSheet: n evenly spaced drawn frames tiled 6 across, labelled with index and time. The first thing to look at.
 function gridSheet(n = 24, cellW = 240, startFrame = null) {
   if (!Number.isInteger(n) || n < 1 || n > 240) throw new Error('Sheet count must be 1..240');
   const cols = 6, rows = Math.ceil(n / cols), cellH = Math.round(cellW * OUT_H / OUT_W), pad = 18, sheet = document.createElement('canvas');
-  sheet.width = cols * cellW; sheet.height = rows * (cellH + pad); const g = sheet.getContext('2d'); g.fillStyle = '#141414'; g.fillRect(0, 0, sheet.width, sheet.height);
+  sheet.width = cols * cellW; sheet.height = rows * (cellH + pad); const g = sheet.getContext('2d'); g.imageSmoothingQuality = 'high'; g.fillStyle = '#141414'; g.fillRect(0, 0, sheet.width, sheet.height);
   g.font = '12px ui-monospace, Menlo, monospace'; g.fillStyle = '#e6e6e6';
   for (let k = 0; k < n; k++) { const i = startFrame === null ? Math.round(k * (FILM.NDRAW - 1) / Math.max(1, n - 1)) : clamp(startFrame + k, 0, FILM.NDRAW - 1); cur = -1; show(i);
-    const x = (k % cols) * cellW, y = Math.floor(k / cols) * (cellH + pad); g.drawImage(cv, x, y, cellW, cellH); g.fillText(`${String(i).padStart(3, '0')}  ${(i / FPS_DRAW).toFixed(2)}s`, x + 4, y + cellH + 13); }
+    const x = (k % cols) * cellW, y = Math.floor(k / cols) * (cellH + pad); g.drawImage(downscale(cv, cellW, cellH), x, y, cellW, cellH); g.fillText(`${String(i).padStart(3, '0')}  ${(i / FPS_DRAW).toFixed(2)}s`, x + 4, y + cellH + 13); }
   cur = -1; return sheet;
 }
 // locate: which scene frame i falls in, its tau (snapped to the 12 fps grid for a scene on twos) and the 12 fps frame index handed to the scene
@@ -581,3 +588,65 @@ async function renderWav() { const sr = 48000, oac = new OfflineAudioContext(2, 
 function note(ac, master, f, t0, t, d, type = 'triangle', g = .25) { const o = ac.createOscillator(), e = ac.createGain(); o.type = type; o.frequency.value = f; e.gain.setValueAtTime(0, t0 + t); e.gain.linearRampToValueAtTime(g, t0 + t + .02); e.gain.exponentialRampToValueAtTime(.0008, t0 + t + d); o.connect(e); e.connect(master); o.start(t0 + t); o.stop(t0 + t + d + .05); }
 function noiseBurst(ac, master, t0, t, d, g = .3, seed = 1) { const sr = ac.sampleRate, buf = ac.createBuffer(1, Math.ceil(sr * d), sr), ch = buf.getChannelData(0), r = rng(seed); for (let i = 0; i < ch.length; i++) ch[i] = (r() * 2 - 1) * Math.pow(1 - i / ch.length, 2); const s = ac.createBufferSource(); s.buffer = buf; const e = ac.createGain(); e.gain.value = g; s.connect(e); e.connect(master); s.start(t0 + t); }
 const pentHz = (o, s, base = 220) => base * Math.pow(2, o + [0, 2, 4, 7, 9][s % 5] / 12);
+
+// ===================== REVIEW =====================
+// Motion made visible in stills, for agents and reviewers who cannot watch playback.
+// render.mjs --onion and review.mjs call these through window hooks; films need no changes.
+function _frameLum(i, w) {
+  cur = -1; show(i); const h = Math.max(2, Math.round(w * OUT_H / OUT_W));
+  const s = _frameLum.cv ??= document.createElement('canvas'); s.width = w; s.height = h;
+  const g = s.getContext('2d', { willReadFrequently: true }); g.imageSmoothingQuality = 'high'; g.drawImage(downscale(cv, w, h), 0, 0, w, h);
+  const d = g.getImageData(0, 0, w, h).data, L = new Uint8ClampedArray(w * h);
+  for (let p = 0, q = 0; q < L.length; p += 4, q++) L[q] = (d[p] * 54 + d[p + 1] * 183 + d[p + 2] * 19) >> 8;
+  return { L, w, h };
+}
+// sceneStarts: the first drawn frame of every scene, so cuts are not mistaken for pops.
+function sceneStarts() { let acc = 0; return FILM.timeline.map(s => { const f = Math.round(acc * FPS_DRAW); acc += s.dur; return { name: s.name || 'scene', start: f, dur: s.dur }; }); }
+// onionSheet: frames start, start+step, ... laid over one another. The static background (per-pixel
+// median) is printed pale; each frame's added ink is tinted from blue (first) to red (last). A dot marks
+// the centroid of the moving ink on every frame, so the dot spacing is the spacing chart of the action.
+function onionSheet(start, count = 12, step = 1, width = 1280) {
+  if (!Number.isInteger(start) || !Number.isInteger(count) || count < 2 || count > 96 || !Number.isInteger(step) || step < 1) throw new Error('Onion expects START,COUNT(2..96)[,STEP]');
+  const idx = Array.from({ length: count }, (_, k) => clamp(start + k * step, 0, FILM.NDRAW - 1)), frames = idx.map(i => _frameLum(i, width).L);
+  const w = width, h = Math.max(2, Math.round(w * OUT_H / OUT_W)), n = w * h, med = new Uint8ClampedArray(n);
+  // Background: per-pixel lightest value on light paper (darkest at night), so every frame's moving ink counts.
+  let tot = 0; for (let q = 0; q < n; q += 7) tot += frames[0][q]; const dark = tot / Math.ceil(n / 7) < 110;
+  for (let q = 0; q < n; q++) { let m = frames[0][q]; for (let k = 1; k < count; k++) m = dark ? Math.min(m, frames[k][q]) : Math.max(m, frames[k][q]); med[q] = m; }
+  const hue = k => { const u = count === 1 ? 0 : k / (count - 1); return parseColor(toHex(hslToRgb([lerp(220, 0, u), .85, .45]))); };
+  const out = document.createElement('canvas'); out.width = w; out.height = h + 34; const g = out.getContext('2d'), img = g.createImageData(w, h), o = img.data;
+  for (let q = 0; q < n; q++) { const v = dark ? 255 - med[q] * .28 : 255 - (255 - med[q]) * .28; o[q * 4] = o[q * 4 + 1] = o[q * 4 + 2] = v; o[q * 4 + 3] = 255; }
+  const cents = [];
+  for (let k = 0; k < count; k++) { const [r, gg, b] = hue(k), F = frames[k]; let sx = 0, sy = 0, sw = 0;
+    for (let q = 0; q < n; q++) { const ink = Math.max((dark ? F[q] - med[q] : med[q] - F[q]) - 10, 0) / 120; if (ink <= 0) continue; const a = Math.min(1, ink) * .9;
+      o[q * 4] = o[q * 4] * (1 - a) + r * a; o[q * 4 + 1] = o[q * 4 + 1] * (1 - a) + gg * a; o[q * 4 + 2] = o[q * 4 + 2] * (1 - a) + b * a; sx += (q % w) * ink; sy += Math.floor(q / w) * ink; sw += ink; }
+    cents.push(sw > 4 ? [sx / sw, sy / sw] : null); }
+  g.putImageData(img, 0, 0); g.lineWidth = 1.5; g.strokeStyle = 'rgba(20,20,20,.55)'; g.beginPath(); let first = true;
+  for (const p of cents) if (p) { first ? g.moveTo(...p) : g.lineTo(...p); first = false; } g.stroke();
+  cents.forEach((p, k) => { if (!p) return; const [r, gg, b] = hue(k); g.fillStyle = `rgb(${r},${gg},${b})`; g.beginPath(); g.arc(p[0], p[1], 4.5, 0, TAU); g.fill(); g.strokeStyle = '#fff'; g.lineWidth = 1; g.stroke(); });
+  g.fillStyle = '#141414'; g.fillRect(0, h, w, 34); g.font = '13px ui-monospace, Menlo, monospace';
+  for (let k = 0; k < count; k++) { const [r, gg, b] = hue(k), x = 8 + k * Math.min(64, (w - 16) / count); g.fillStyle = `rgb(${r},${gg},${b})`; g.fillRect(x, h + 8, 10, 10); g.fillStyle = '#ddd'; if (count <= 24 || k % 2 === 0) g.fillText(String(idx[k]), x + 13, h + 18); }
+  g.fillStyle = '#999'; g.fillText(`onion ${idx[0]}..${idx.at(-1)} step ${step} · dots = centroid of moving ink · even dots = even spacing`, 8, h + 31);
+  cur = -1; return out;
+}
+// analyzeFrames: per-frame numbers for review.mjs. Each entry compares frame i with i-1 and i-2 at a small size.
+function analyzeFrames(a, b, w = 320) {
+  const res = [], prev = [];
+  for (let i = Math.max(0, a - 2); i < b; i++) {
+    const { L, h } = _frameLum(i, w), n = L.length;
+    if (i >= a) {
+      const hist = new Uint32Array(256); let sum = 0, sq = 0; for (let q = 0; q < n; q++) { hist[L[q]]++; sum += L[q]; sq += L[q] * L[q]; }
+      const pct = p => { let c = 0, t = n * p; for (let v = 0; v < 256; v++) { c += hist[v]; if (c >= t) return v; } return 255; };
+      const mean = sum / n, std = Math.sqrt(Math.max(0, sq / n - mean * mean));
+      const cmp = P => { if (!P) return null; let s = 0, ch = 0, x0 = w, y0 = h, x1 = -1, y1 = -1; for (let q = 0; q < n; q++) { const d = Math.abs(L[q] - P[q]); s += d; if (d > 24) { ch++; const x = q % w, y = (q / w) | 0; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; } } return { mad: s / n, changed: ch / n, box: x1 < 0 ? null : [x0 / w, y0 / h, (x1 + 1) / w, (y1 + 1) / h] }; };
+      const d1 = cmp(prev.at(-1)), d2 = cmp(prev.at(-2));
+      res.push({ i, mean: +mean.toFixed(2), std: +std.toFixed(2), p1: pct(.002), p50: pct(.5), p99: pct(.998), d1, d2: d2 && { mad: d2.mad, changed: d2.changed } });
+    }
+    prev.push(L); if (prev.length > 2) prev.shift();
+  }
+  cur = -1; return res;
+}
+if (typeof window !== 'undefined') {
+  window.__onion = (start, count, step = 1, width = 1280) => onionSheet(start, count, step, width).toDataURL('image/png');
+  window.__analyze = (a, b, w) => analyzeFrames(a, b, w);
+  window.__scenes = () => sceneStarts();
+}

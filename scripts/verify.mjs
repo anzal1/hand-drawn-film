@@ -90,13 +90,43 @@ try {
  });
  await check('all examples load and support late/backward frame evaluation',async()=>{
   const results=[];
-  const examples=fs.readdirSync(path.join(root,'examples')).filter(f=>f.endsWith('.html'));
+  // Interactive pages (workshop.html) drive the engine without defineFilm and never signal __ready.
+  const examples=fs.readdirSync(path.join(root,'examples')).filter(f=>f.endsWith('.html')&&!f.startsWith('.')&&fs.readFileSync(path.join(root,'examples',f),'utf8').includes('defineFilm('));
   examples.push('becoming-phoenix/phoenix.html');
   for(const file of examples){
    const {p,errors}=await load(path.join(root,'examples',file));
    const result=await p.evaluate(()=>{const n=window.__NDRAW,f=Math.floor(n*.31);const a=window.__frame(f);window.__frame(n-1);const b=window.__frame(f);return {fps:window.__fps,frames:n,repeat:a===b};});
    assert.deepEqual(errors,[],file);assert.equal(result.fps,24,file);assert.equal(result.repeat,true,file+' seek mismatch');results.push({file,...result});await p.close();
   }return results;
+ });
+
+ await check('sketch.js: svg paths, spacing charts, pinned boil, sheet marks and draw-on',async()=>{
+  const {p}=await load(path.join(root,'examples/cat-and-mug.html'),'w=480');
+  const r=await p.evaluate(()=>{
+   const near=(a,b,e=.6)=>Math.hypot(a[0]-b[0],a[1]-b[1])<e;
+   const sq=svgPoints('M 0 0 L 100 0 L 100 100 Z',{step:5})[0], arc=svgPoints('M 0 0 A 50 50 0 0 1 100 0',{step:2})[0].points, rel=svgPoints('m 10 10 l 20 0 c 10 0 10 10 0 10',{step:2})[0].points;
+   const top=Math.min(...arc.map(q=>q[1]));
+   const sp={even:spacing(3,'even'),out:spacing(3,'slowOut'),inn:spacing(3,'slowIn'),io:spacing(3,'slowInOut'),thirds:spacing(3,'thirds')};
+   const raw=svgCel({a:'M 0 0 C 30 -40 70 -40 100 0',b:{d:'M 0 20 L 100 20',fill:'paper'}},{points:20});
+   const v=boilCels(raw,3,{amp:3}),pinned=v.every(x=>x.strokes.every((s,i)=>near(s.points[0],raw.strokes[i].points[0],1e-6)&&near(s.points.at(-1),raw.strokes[i].points.at(-1),1e-6)));
+   const moved=v[0].strokes[0].points.some((q,i)=>!near(q,raw.strokes[0].points[i],.05)), differ=v[0].strokes[0].points.some((q,i)=>!near(q,v[1].strokes[0].points[i],.05));
+   const sb=sheetBuilder({library:{A:raw,B:boilCels(raw,2)[1]}}).key('A',4).mark('go').between('A','B',spacing(2),2).key('B',3).hold('B',8,{boil:2,every:4}).build();
+   const cv=document.createElement('canvas');cv.width=cv.height=120;const g=cv.getContext('2d'),C=compileCel(raw,{id:'t'}),img=o=>{g.clearRect(0,0,120,120);g.save();g.translate(10,60);drawCel(g,C,o);g.restore();return cv.toDataURL();};
+   const blank=(()=>{g.clearRect(0,0,120,120);return cv.toDataURL();})();
+   return {closed:sq.close,sqN:sq.points.length,arcTop:top,relEnd:rel.at(-1),sp,pinned,moved,differ,frames:sb.frames,mark:sb.marks.go,time:sb.time('go'),ids:[0,4,6,8,11,15].map(f=>sb.atFrame(f).id),
+    reveal0:img({reveal:0})===blank,reveal1:img({reveal:1})===img({}),revealHalf:img({reveal:.5})!==img({})&&img({reveal:.5})!==blank,weight:img({weight:2})!==img({})};
+  });
+  assert.equal(r.closed,true);assert.equal(r.sqN,41);assert.ok(Math.abs(r.arcTop+50)<1,'arc apex '+r.arcTop);assert.deepEqual(r.relEnd.map(Math.round),[30,20]);
+  assert.deepEqual(r.sp.even,[.25,.5,.75]);assert.ok(r.sp.out[0]<.25&&r.sp.inn[0]>.25&&r.sp.io[1]===.5);assert.deepEqual(r.sp.thirds,[.6667,.8889,.963]);
+  assert.equal(r.pinned,true);assert.equal(r.moved,true);assert.equal(r.differ,true);
+  assert.equal(r.frames,4+4+3+8);assert.equal(r.mark,4);assert.equal(r.time,4/24);
+  assert.equal(r.ids[0],'A');assert.ok(r.ids[1].startsWith('A>B#0'));assert.ok(r.ids[3].startsWith('B'));assert.notEqual(r.ids[4],r.ids[5]);
+  assert.equal(r.reveal0,true);assert.equal(r.reveal1,true);assert.equal(r.revealHalf,true);assert.equal(r.weight,true);await p.close();return r;
+ });
+ await check('review hooks: onion sheet and frame analysis see motion and holds',async()=>{
+  const {p}=await load(path.join(root,'examples/cat-and-mug.html'),'w=480');
+  const r=await p.evaluate(()=>{const o=onionSheet(196,8,2,320);const a=analyzeFrames(24,40,160);return {w:o.width,h:o.height,rows:a.length,held:a.filter(x=>x.d1.mad<.02).length,moving:a.filter(x=>x.d1.mad>.05).length,scenes:sceneStarts().length};});
+  assert.equal(r.w,320);assert.ok(r.h>180);assert.equal(r.rows,16);assert.ok(r.held>4,'holds detected');assert.ok(r.moving>0,'motion detected');assert.equal(r.scenes,1);await p.close();return r;
  });
  await check('phoenix paper unfolds above a fixed attachment and seeks reproducibly',async()=>{
   const {p,errors}=await load(path.join(root,'examples/becoming-phoenix/phoenix.html'),'w=480');
