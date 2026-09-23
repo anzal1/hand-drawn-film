@@ -10,6 +10,17 @@ fixing.
 
 ![A cat, a mug, a table: SVG-authored whole drawings, draw-on, paper fills, boiling holds](assets/preview-cat-and-mug.jpg)
 
+## Install
+
+```bash
+git clone https://github.com/anzal1/hand-drawn-film ~/.claude/skills/hand-drawn-film
+cd ~/.claude/skills/hand-drawn-film/scripts && npm i --no-audit --no-fund
+```
+
+Needs Node 22+, Google Chrome or Chromium, and ffmpeg. Other agents: clone into their skills
+folder (for example `~/.agents/skills/`). Then ask for a film: *"a 10 second pencil film of a
+fox that steals a scarf, 9:16"*.
+
 ## What is new in this version
 
 | | upstream | this version |
