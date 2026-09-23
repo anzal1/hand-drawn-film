@@ -150,6 +150,7 @@ Inspect the actual encoded action before judging its drawing or timing.
 | [`assets/sketch.js`](assets/sketch.js) | SVG path drawings, boil variants, spacing charts, sheet builder, sprite cache |
 | [`assets/starter-film.html`](assets/starter-film.html) | the template `new.mjs` turns into a working film |
 | [`examples/cat-and-mug.html`](examples/cat-and-mug.html) | 12.5 s pencil gag built with sketch.js, with score |
+| [`examples/cat-journey.html`](examples/cat-journey.html) | 48 s, 4:5, a cat's-eye journey: one room through a small 3D projector with world-anchored pencil lines, near-plane clipping, drawn captions and score |
 | [`scripts/review.mjs`](scripts/review.mjs) | the motion report |
 | [`scripts/new.mjs`](scripts/new.mjs) | project scaffolder |
 | [`references/craft.md`](references/craft.md) | timing, spacing, line and composition numbers |
