@@ -1,0 +1,405 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A cat's journey</title>
+<style>body{margin:0;background:#242321;display:grid;place-items:center;min-height:100vh}canvas{max-width:100vw;max-height:100vh;object-fit:contain}</style>
+<canvas id="c"></canvas>
+<script src="../assets/core.js"></script>
+<script src="../assets/studio.js"></script>
+<script src="../assets/cels.js"></script>
+<script src="../assets/sketch.js"></script>
+<script>
+'use strict';
+// A cat's journey, mostly through its own eyes. 4:5 for a feed, captions drawn in, ~47 s.
+// Every POV shot is one room seen through one small 3D projector, so the camera can walk,
+// tilt up a table leg, lean over the edge and follow the mug down. Pencil texture on moving
+// lines is anchored to world positions (wline), so it travels with the object instead of shimmering.
+{ const q = new URLSearchParams(location.search); setFormat({ar:q.get('ar') || '4:5', width:+q.get('w') || 1080}); }
+const LOOK = 'pencil', INK = '#3a322b', PAPER = '#f4efe3', P = [[0,.12],[.14,.85],[.45,1],[.8,.7],[1,.08]];
+const OPT = {material:'pencil', color:INK, weight:2.1, value:1.35};
+</script>
+<script src="cat/cat-kit.js"></script>
+<script>
+'use strict';
+
+// ---------- the room, in metres. x right, y up, z forward from the cat's bed ----------
+const TABLE = {x0:.12, x1:1.3, z0:5.0, z1:5.9, top:.75, legW:.05};
+const CHAIR = {x0:-.95, x1:-.55, z0:2.9, z1:3.3, seat:.45};
+const SOFA = {x0:-2.5, x1:-1.6, z0:4.4, z1:7.6, gap:.1, seat:.42};
+const WALL = 11, BOARD = .15;
+
+// camera -> projector. Returns [sx, sy, depth] or null behind the lens.
+const FOC = 1000;
+function camera({x = 0, y = .24, z = 0, pitch = 0, yaw = 0, hy = H * .38, f = FOC}) {
+  const cp = Math.cos(pitch), sp = Math.sin(pitch), cy = Math.cos(yaw), sy = Math.sin(yaw);
+  const cs = (X, Y, Z) => { const dx = X - x, dy = Y - y, dz = Z - z, rx = dx * cy - dz * sy, rz = dx * sy + dz * cy; return [rx, dy * cp - rz * sp, rz * cp + dy * sp]; };
+  const pj = ([rx, yc, zc]) => zc < NEAR ? null : [CX + rx * f / zc, hy - yc * f / zc, zc];
+  const pr = (X, Y, Z) => pj(cs(X, Y, Z)); pr.cs = cs; pr.pj = pj; return pr;
+}
+const NEAR = .03;
+// wline: a pencil line through world points, sampled every `step` metres from its first point.
+// Tooth and weight are hashed by sample index, so they belong to the object, not the screen.
+function wline(c, pr, pts, {w = 1.6, a = .8, seed = 1, step = .025} = {}) {
+  const S = []; let k = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const [A, B] = [pts[i - 1], pts[i]], L = Math.hypot(B[0] - A[0], B[1] - A[1], B[2] - A[2]), n = Math.max(1, Math.round(L / step));
+    for (let j = i === 1 ? 0 : 1; j <= n; j++) { const u = j / n; S.push({p: pr(lerp(A[0], B[0], u), lerp(A[1], B[1], u), lerp(A[2], B[2], u)), k: k++}); }
+  }
+  c.save(); c.strokeStyle = INK; c.lineCap = 'round';
+  for (let pass = 0; pass < 2; pass++) for (let i = 1; i < S.length; i++) {
+    const s0 = S[i - 1].p, s1 = S[i].p; if (!s0 || !s1) continue;
+    const h = hash(S[i].k * 3 + pass, seed); if (h < .06) continue;
+    const d = Math.min(s0[2], s1[2]), sc = clamp(Math.sqrt(1.4 / d), .5, 2.4);
+    if (Math.hypot(s1[0] - s0[0], s1[1] - s0[1]) > 400) continue;          // a segment crossing the lens
+    const off = pass ? .5 * sc : 0;
+    c.lineWidth = w * sc * (pass ? .55 : 1) * (.8 + .4 * h); c.globalAlpha = a * (pass ? .35 : .62 + .3 * h);
+    c.beginPath(); c.moveTo(s0[0] + off, s0[1] + off); c.lineTo(s1[0] + off, s1[1] + off); c.stroke();
+  }
+  c.restore();
+}
+// wpoly clips the polygon against the near plane in camera space before projecting,
+// so a table top that runs under the lens still covers what is beneath it.
+function wpoly(c, pr, pts, fill, alpha = 1) {
+  const v = pts.map(p => pr.cs(...p)), out = [];
+  for (let i = 0; i < v.length; i++) { const a = v[i], b = v[(i + 1) % v.length], ia = a[2] >= NEAR, ib = b[2] >= NEAR;
+    if (ia) out.push(a); if (ia !== ib) { const u = (NEAR - a[2]) / (b[2] - a[2]); out.push([lerp(a[0], b[0], u), lerp(a[1], b[1], u), NEAR + 1e-6]); } }
+  if (out.length < 3) return false; const q = out.map(pr.pj);
+  c.save(); c.globalAlpha = alpha; c.fillStyle = fill; c.beginPath(); q.forEach((v, i) => i ? c.lineTo(v[0], v[1]) : c.moveTo(v[0], v[1])); c.closePath(); c.fill(); c.restore(); return true;
+}
+const box = (x0, x1, y0, y1, z) => [[x0, y0, z], [x1, y0, z], [x1, y1, z], [x0, y1, z]];
+const box2 = (x, z0, z1, y0, y1) => [[x, y0, z0], [x, y0, z1], [x, y1, z1], [x, y1, z0]];
+
+// ---------- the room drawn from any camera; painter's order far to near ----------
+function room(c, cam, {t = 0, table = true, mug = null, steam = true, sofa = true, extra} = {}) {
+  const pr = camera(cam);
+  // wall, window and the patch of sun it throws on the floor
+  wpoly(c, pr, [[-3, 0, WALL], [3, 0, WALL], [3, 3, WALL], [-3, 3, WALL]], PAPER);
+  wline(c, pr, [[-3, .08, WALL], [3, .08, WALL]], {w: 1.3, a: .6, seed: 2, step: .05});
+  wline(c, pr, [[-3, 0, WALL], [3, 0, WALL]], {w: 1.6, a: .7, seed: 3, step: .05});
+  wline(c, pr, [[-.8, .9, WALL], [.4, .9, WALL], [.4, 2.1, WALL], [-.8, 2.1, WALL], [-.8, .9, WALL]], {w: 1.4, a: .65, seed: 4, step: .04});
+  wline(c, pr, [[-.2, .9, WALL], [-.2, 2.1, WALL]], {w: 1, a: .5, seed: 5, step: .04}); wline(c, pr, [[-.8, 1.5, WALL], [.4, 1.5, WALL]], {w: 1, a: .5, seed: 6, step: .04});
+  wpoly(c, pr, [[-.75, .002, 7.2], [.35, .002, 7.2], [.55, .002, 9.6], [-.55, .002, 9.6]], '#f1d99f', .55);
+  // floorboards: long seams run along z, short seams are staggered per board
+  for (let k = 0; k <= 30; k++) {
+    const X = -2.25 + k * BOARD; wline(c, pr, [[X, 0, -1], [X, 0, WALL]], {w: 1, a: .42, seed: 10 + k, step: .04});
+    for (let n = -1, z0 = hash(k, 4) * 1.35; z0 + n * 1.35 < WALL; n++) { const Z = z0 + n * 1.35; wline(c, pr, [[X, 0, Z], [X + BOARD, 0, Z]], {w: .9, a: .38, seed: 200 + k * 20 + n, step: .02}); }
+  }
+  // objects, far to near by distance from the camera
+  const d2 = (x, z) => (x - cam.x) ** 2 + (z - cam.z) ** 2, items = [];
+  if (sofa) items.push({d: d2(SOFA.x1, (SOFA.z0 + SOFA.z1) / 2), draw: () => drawSofa(c, pr, cam)});
+  items.push({d: d2(-.15, 2.2), draw: () => yarn(c, pr, -.15, 2.2)});
+  items.push({d: d2((CHAIR.x0 + CHAIR.x1) / 2, CHAIR.z0), draw: () => chair(c, pr)});
+  if (table) items.push({d: d2((TABLE.x0 + TABLE.x1) / 2, TABLE.z0) - (cam.y > TABLE.top ? 50 : 0), draw: () => drawTable(c, pr, cam, {t, mug, steam})});
+  if (extra) items.push(...extra(pr, d2));
+  items.sort((a, b) => b.d - a.d).forEach(i => i.draw());
+  return pr;
+}
+function leg(c, pr, x, z, w, h, seed) {
+  wpoly(c, pr, box(x - w / 2, x + w / 2, 0, h, z), PAPER);
+  wline(c, pr, [[x - w / 2, 0, z], [x - w / 2, h, z]], {w: 1.7, a: .85, seed, step: .02});
+  wline(c, pr, [[x + w / 2, 0, z], [x + w / 2, h, z]], {w: 1.7, a: .85, seed: seed + 1, step: .02});
+}
+function chair(c, pr) {
+  const {x0, x1, z0, z1, seat} = CHAIR;
+  for (const [x, z, s] of [[x0 + .02, z1, 41], [x1 - .02, z1, 43], [x0 + .02, z0, 45], [x1 - .02, z0, 47]]) leg(c, pr, x, z, .03, seat, s);
+  wpoly(c, pr, [[x0, seat, z0], [x1, seat, z0], [x1, seat, z1], [x0, seat, z1]], PAPER);
+  wline(c, pr, [[x0, seat, z0], [x1, seat, z0], [x1, seat, z1], [x0, seat, z1], [x0, seat, z0]], {w: 1.5, a: .8, seed: 49, step: .02});
+  wline(c, pr, [[x0, seat - .03, z0], [x1, seat - .03, z0]], {w: 1.1, a: .6, seed: 50, step: .02});
+}
+function yarn(c, pr, x, z) {
+  const p = pr(x, .05, z); if (!p) return; const r = .05 * FOC / p[2];
+  c.save(); c.fillStyle = PAPER; c.beginPath(); c.arc(p[0], p[1], r, 0, TAU); c.fill(); c.strokeStyle = INK; c.globalAlpha = .75; c.lineWidth = 1.6;
+  c.beginPath(); c.arc(p[0], p[1], r, 0, TAU); c.stroke(); c.globalAlpha = .45; c.lineWidth = 1;
+  for (let i = 0; i < 5; i++) { c.beginPath(); c.ellipse(p[0], p[1], r * (.95 - i * .06), r * (.35 + i * .12), .6 + i * .5, 0, TAU); c.stroke(); }
+  c.beginPath(); c.moveTo(p[0] + r * .7, p[1] + r * .7); c.quadraticCurveTo(p[0] + r * 2, p[1] + r * 1.2, p[0] + r * 3.2, p[1] + r * .9); c.stroke(); c.restore();
+}
+function drawTable(c, pr, cam, {t, mug, steam}) {
+  const {x0, x1, z0, z1, top, legW} = TABLE, u = top - .035;
+  for (const [x, z, s] of [[x0 + .04, z1 - .04, 61], [x1 - .04, z1 - .04, 63], [x1 - .04, z0 + .04, 65], [x0 + .04, z0 + .04, 67]]) leg(c, pr, x, z, legW, u, s);
+  if (cam.y < u) {       // from below: the underside is a shadowed ceiling
+    wpoly(c, pr, [[x0, u, z0], [x1, u, z0], [x1, u, z1], [x0, u, z1]], '#ddd3c1');
+    for (let i = 1; i < 12; i++) wline(c, pr, [[x0 + i * .1, u, z0], [x0 + i * .1 + .02, u, z1]], {w: .8, a: .3, seed: 70 + i, step: .03});
+  } else {
+    wpoly(c, pr, [[x0, top, z0], [x1, top, z0], [x1, top, z1], [x0, top, z1]], PAPER);
+    for (let i = 1; i < 8; i++) wline(c, pr, [[x0 + .02, top, z0 + i * .11], [x1 - .02, top, z0 + i * .11 + .01]], {w: .8, a: .42, seed: 90 + i, step: .03});
+  }
+  wpoly(c, pr, box(x0, x1, u, top, z0), PAPER);
+  wline(c, pr, [[x0, top, z0], [x1, top, z0]], {w: 2, a: .9, seed: 80, step: .02});
+  wline(c, pr, [[x0, u, z0], [x1, u, z0]], {w: 1.3, a: .7, seed: 81, step: .02});
+  wline(c, pr, [[x0, top, z0], [x0, top, z1], [x1, top, z1], [x1, top, z0]], {w: 1.6, a: .8, seed: 82, step: .02});
+  if (mug && !mug.gone) {
+    if (cam.y > top) drawMug(c, pr, mug, t, steam);
+    else if (steam) {                          // from below the slab hides the mug: only its steam curls over the front edge
+      const p = pr(mug.x, top - .02, z0 - .02); if (p) { const s = FOC / p[2] * .0013; c.save(); c.translate(p[0], p[1]); c.scale(s, s); drawCel(c, STEAM[Math.floor(t * 6) % 3], {...OPT, weight: OPT.weight / Math.sqrt(s), value: .95}); c.restore(); }
+    }
+  }
+}
+// the mug is a billboard of the kit's drawing; 100 drawing units = 0.1 m
+const DMUG = compileCel(MUG, {id:'mug'});
+const STEAM = boilCels(svgCel({'s1': 'M -14 -110 C -26 -134 -2 -150 -14 -176 C -24 -196 -6 -208 -12 -226', 's2': 'M 12 -114 C 2 -136 24 -154 12 -180 C 4 -196 18 -206 14 -218'}, {pressure:P, points:24}), 3, {amp:4, pin:false, freq:1.2}).map((r, k) => compileCel(r, {id:'steam' + k}));
+function drawMug(c, pr, m, t, steam = true) {
+  const p = pr(m.x, m.y, m.z); if (!p) return; const s = FOC / p[2] * .001;
+  c.save(); c.translate(p[0], p[1]); c.scale(s, s); c.rotate(m.rot || 0);
+  if (steam && !m.rot) drawCel(c, STEAM[Math.floor(t * 6) % 3], {...OPT, weight: OPT.weight / Math.sqrt(s), value: .9});
+  drawCel(c, DMUG, {...OPT, weight: OPT.weight / Math.sqrt(s)}); c.restore();
+}
+function drawSofa(c, pr, cam) {
+  const {x0, x1, z0, z1, gap, seat} = SOFA;
+  if (cam.x < x1 && cam.y < gap) {            // underneath: the underside is a dark ceiling
+    wpoly(c, pr, [[x0, gap, z0], [x1, gap, z0], [x1, gap, z1], [x0, gap, z1]], '#3b332d', .92);
+    return;
+  }
+  wpoly(c, pr, [[x1, 0, z0], [x1, 0, z1], [x1, seat + .3, z1], [x1, seat + .3, z0]], '#e4d8c6');
+  for (const z of [z0, z1 - .25]) { wpoly(c, pr, box2(x1 + .02, z, z + .25, gap, seat + .15), '#dccfbb'); wline(c, pr, [[x1 + .02, gap, z], [x1 + .02, seat + .15, z], [x1 + .02, seat + .15, z + .25], [x1 + .02, gap, z + .25]], {w: 1.6, a: .8, seed: 190 + z, step: .02}); }
+  wpoly(c, pr, [[x1, 0, z0], [x1, 0, z1], [x1, gap, z1], [x1, gap, z0]], '#3b332d', .8);
+  for (const z of [z0 + .1, z1 - .1]) leg(c, pr, x1 - .05, z, .06, gap, 180 + z * 7);
+  wline(c, pr, [[x1, gap, z0], [x1, gap, z1]], {w: 1.8, a: .9, seed: 101, step: .02});
+  wline(c, pr, [[x1, seat, z0], [x1, seat, z1]], {w: 1.6, a: .8, seed: 102, step: .02});
+  wline(c, pr, [[x1, seat + .3, z0], [x1, seat + .3, z1]], {w: 1.5, a: .75, seed: 103, step: .02});
+  for (let i = 0; i <= 60; i++) { const z = z0 + i * (z1 - z0) / 60; wline(c, pr, [[x1, gap, z], [x1, gap - .035 - hash(i, 5) * .015, z + .01]], {w: 1, a: .7, seed: 110 + i, step: .01}); }   // fringe
+  for (const z of [z0 + .8, z0 + 1.6, z0 + 2.4]) wline(c, pr, [[x1, gap + .02, z], [x1, seat + .28, z]], {w: .9, a: .45, seed: 170 + z * 10, step: .02});
+}
+
+// ---------- drawings held near the lens: paws, slippers ----------
+const PAW = compileCel(svgCel({
+  'leg/l': 'M -54 1500 C -56 600 -62 90 -58 20', 'leg/r': 'M 54 1500 C 56 600 62 90 58 20',
+  'body/fill': {d: 'M -58 20 L -56 1500 L 56 1500 L 58 20 Z', width: .5, opacity: 0, fill: 'paper'},
+  'paw': {d: 'M -58 20 C -68 -22 -40 -54 0 -56 C 40 -54 68 -22 58 20 C 30 36 -30 36 -58 20 Z', width: 2.2, fill: 'paper'},
+  'toes': {d: 'M -22 -44 C -25 -26 -23 -8 -19 8 M 0 -50 C 0 -32 0 -10 0 6 M 22 -44 C 25 -26 23 -8 19 8', width: 1.3, opacity: .65},
+  'fur': {d: 'M -40 60 C -30 90 -34 120 -44 150 M 38 70 C 30 100 34 130 44 160', width: .9, opacity: .45},
+}, {pressure: P}), {id: 'paw'});
+function paw(c, x, y, s = 1, rot = 0) { c.save(); resetT(c); c.translate(x, y); c.rotate(rot); c.scale(s, s); drawCel(c, PAW, {...OPT, weight: OPT.weight / Math.sqrt(s)}); c.restore(); }
+const SLIPPER = compileCel(svgCel({
+  'trouser': {d: 'M -66 -150 L -80 -1900 L 80 -1900 L 66 -150 Z', width: 2, fill: 'paper'},
+  'crease': {d: 'M -20 -300 C -24 -500 -18 -700 -26 -900', width: 1, opacity: .45},
+  'sole': {d: 'M -104 0 C -108 -22 -98 -36 -82 -40 L 82 -40 C 98 -36 108 -22 104 0 Z', width: 2, fill: 'paper'},
+  'toe': {d: 'M -94 -30 C -98 -112 -52 -152 0 -152 C 52 -152 98 -112 94 -30 Z', width: 2.1, fill: 'paper'},
+  'stitch': {d: 'M -88 -42 C -40 -50 40 -50 88 -42', width: 1, opacity: .55},
+  'pom': {d: 'M -26 -150 A 26 26 0 1 1 26 -150 A 26 26 0 1 1 -26 -150 Z', width: 1.6, fill: 'paper'},
+  'fluff': {d: 'M -14 -160 L -8 -146 M 4 -168 L 8 -150 M 14 -156 L 18 -142', width: .9, opacity: .6},
+}, {pressure: P}), {id: 'slipper'});
+
+// ---------- lids, captions, speed lines ----------
+function lids(c, o) {
+  if (o >= .999) return; c.save(); resetT(c);
+  const g = clamp(o, 0, 1) * H * 1.3, e = CY - g * .5, ec = CY - g * 1.15, b = CY + g * .5, bc = CY + g * 1.15;
+  c.fillStyle = '#2a2420';
+  c.beginPath(); c.moveTo(-20, -20); c.lineTo(W + 20, -20); c.lineTo(W + 20, e); c.bezierCurveTo(W * .72, ec, W * .28, ec, -20, e); c.closePath(); c.fill();
+  c.beginPath(); c.moveTo(-20, H + 20); c.lineTo(W + 20, H + 20); c.lineTo(W + 20, b); c.bezierCurveTo(W * .72, bc, W * .28, bc, -20, b); c.closePath(); c.fill();
+  c.restore();
+}
+function caption(c, text, t, t0, {y = 170, size = 84, dur = .45, rot = -.025, x = CX} = {}) {
+  if (t < t0) return; const u = clamp((twos(t) - t0) / dur, 0, 1);
+  c.save(); resetT(c); c.translate(x, y); c.rotate(rot); c.font = `${size}px ${HAND_FONT}`; c.textAlign = 'center'; c.textBaseline = 'middle';
+  const w = c.measureText(text).width; c.beginPath(); c.rect(-w / 2 - 30, -size, (w + 60) * u, size * 2); c.clip();
+  c.lineJoin = 'round'; c.strokeStyle = PAPER; c.lineWidth = 14; c.globalAlpha = .9; c.strokeText(text, 0, 0);
+  c.fillStyle = INK; c.globalAlpha = .95; c.fillText(text, 0, 0); c.restore();
+}
+function speed(c, k, seed, dir = 'v') {
+  c.save(); resetT(c); c.strokeStyle = INK; c.lineCap = 'round'; const r = rng(seed);
+  for (let i = 0; i < 26 * k; i++) { const x = r() * W, y = r() * H, L = 120 + r() * 380; c.globalAlpha = .18 + r() * .3; c.lineWidth = 1 + r() * 2.2; c.beginPath();
+    if (dir === 'v') { c.moveTo(x, y); c.lineTo(x, y + L); } else { const edge = x < CX ? x * .45 : W - (W - x) * .45; c.moveTo(edge, y); c.lineTo(edge + (x < CX ? -1 : 1) * L * .4, y); } c.stroke(); }
+  c.restore();
+}
+
+// ---------- the shots ----------
+const MUG0 = {x: .56, y: TABLE.top, z: 5.38};
+const walkZ = t => 4.15 * sm(0, 6.6, t, u => u < .15 ? .5 * u * u / .15 / .85 : u > .85 ? 1 - .5 * (1 - u) * (1 - u) / .15 / .85 : (u - .075) / .85);
+function stepPaws(c, phase, lift = 1, spread = 190, base = H - 10) {
+  for (const [side, off] of [[-1, 0], [1, 1]]) {
+    const q = ((phase + off) % 2 + 2) % 2, swing = q < 1, u = swing ? q : q - 1;
+    const y = swing ? base - 150 * Math.sin(Math.PI * u) * lift - 60 * u : base - 60 + 60 * u, s = swing ? 1 - .12 * Math.sin(Math.PI * u) : 1;
+    paw(c, CX + side * spread, y, s * 1.45, side * -.06);
+  }
+}
+const OPEN = [[0, .08], [.3, .08], [.8, .3], [1.5, .3], [1.7, .05], [2.0, .05], [2.6, .75], [3.2, 1]];
+function wake(c, t) {
+  paper(c, PAPER, null, 11);
+  room(c, {x: .05, y: .12, z: 0, pitch: .06}, {t, mug: MUG0});
+  lids(c, key(twos(t), OPEN.map(([a, b]) => [a, b]), easeInOutSine));
+  caption(c, '6:04 am', t, 3.0);
+}
+function patrol(c, t) {
+  paper(c, PAPER, null, 11);
+  const z = walkZ(t), ph = walkZ(twos(t)) / .2, bob = Math.abs(Math.sin(Math.PI * ph)) * .008;
+  room(c, {x: lerp(.05, .5, sm(0, 6.6, t, easeInOutSine)) + Math.sin(Math.PI * ph) * .006, y: .24 + bob, z, pitch: .02}, {t, mug: MUG0});
+  stepPaws(c, ph, sm(0, .5, t) * (1 - sm(6.2, 6.8, t)));
+  caption(c, 'patrol.', t, 1.2);
+}
+const PITCH_UP = t => .72 * sm(.5, 2.7, t, easeInOutSine);
+function lookup(c, t) {
+  paper(c, PAPER, null, 11);
+  room(c, {x: .5 + .04 * sm(.5, 2.7, t, easeInOutSine), y: .24, z: 4.15 + .12 * sm(.5, 2.7, t, easeInOutSine), pitch: PITCH_UP(t)}, {t, mug: MUG0});
+  caption(c, "what's up there?", t, 2.6, {y: H - 190});
+}
+function jump(c, t) {
+  paper(c, PAPER, null, 11);
+  if (t < .62) {                                   // crouch: head down a little, paws gather
+    const k = sm(0, .5, twos(t), easeOut);
+    room(c, {x: .54, y: .24 - .07 * k, z: 4.27, pitch: .72 - .3 * k}, {t, mug: MUG0});
+    paw(c, CX - 150, H + 40 - 190 * k, 1.1, .08); paw(c, CX + 150, H + 40 - 190 * k, 1.1, -.08);
+  } else if (t < .87) {                             // the leap: one whoosh of lines
+    const u = (t - .62) / .25; room(c, {x: .54, y: lerp(.3, .95, u), z: lerp(4.4, 4.95, u), pitch: lerp(.4, -.1, u)}, {t, mug: MUG0}); speed(c, 1.6, 300 + Math.floor(t * 24));
+  } else {                                          // landing: a bump that settles
+    const u = t - .87, bump = -.04 * Math.exp(-u * 7) * Math.cos(u * 18);
+    room(c, {...TCAM, y: TCAM.y + bump}, {t, mug: MUG0});
+    const k = sm(0, .25, twos(u), easeOut); paw(c, CX - 140, H - 120 * k + 60, 1.1, .06); paw(c, CX + 140, H - 120 * k + 60, 1.1, -.06);
+  }
+}
+// on the table: the cat's eye is 0.22 m above the top
+const TCAM = {x: .5, y: TABLE.top + .22, z: 5.06, pitch: -.28};
+const TAP = 2.3, NUDGE_Z = .07;
+function mugTable(t) { return {x: .56, y: TABLE.top, z: 5.38 + NUDGE_Z * easeOut(clamp((t - TAP) / .25, 0, 1)), rot: 0}; }
+function investigate(c, t) {
+  paper(c, PAPER, null, 11);
+  const m = mugTable(twos(t)), look = .02 * sm(.2, 1, t, easeInOutSine);
+  const pr = room(c, {...TCAM, pitch: TCAM.pitch - look}, {t, mug: m});
+  // paw reaches along a slight arc to the mug's near side, taps, retracts
+  const tip = pr(m.x - .03, m.y + .03, m.z - .04), reach = key(twos(t), [[1.2, 0], [2.1, 1], [2.35, 1.04], [2.9, .25], [3.4, 0]], easeInOutSine);
+  const start = [CX - 60, H + 220];
+  if (reach > 0 && tip) paw(c, lerp(start[0], tip[0], reach), lerp(start[1], tip[1] + 40, reach) - Math.sin(Math.PI * reach) * 60, lerp(1.1, .62, reach), lerp(0, .25, reach));
+  paw(c, CX + 150, H + 30, 1.1, -.06);
+  caption(c, 'investigate.', t, .6);
+}
+// the cutaway: the cat from cat-and-mug, now looking at us
+const ROOMSET = svgCel({
+  'window/frame': {d:'M 760 -620 L 760 -170 L 1330 -170 L 1330 -620 Z', width:1.5, opacity:.55},
+  'window/cross': {d:'M 1045 -615 L 1045 -175 M 766 -395 L 1324 -395', width:1.1, opacity:.45},
+  'window/sill': {d:'M 735 -170 L 1355 -170 M 742 -156 L 1348 -156', width:1.3, opacity:.5},
+  'window/hill': {d:'M 766 -250 C 860 -300 960 -292 1045 -262 C 1140 -232 1230 -240 1324 -290', width:.9, opacity:.35},
+  'table/top': {d:'M 200 0 L 1430 0', width:2.3}, 'table/edge': {d:'M 206 22 L 1426 22', width:1.2, opacity:.6},
+  'table/end': {d:'M 1430 0 L 1426 22', width:1.4, opacity:.8}, 'table/legR': {d:'M 1350 24 L 1340 380', width:1.8, opacity:.8},
+  'floor': {d:'M 0 382 C 500 376 1300 386 1920 380', width:1, opacity:.35},
+}, {pressure:P, offset:[0, 700]});
+const DROOM = compileCel(ROOMSET, {id:'roomset'});
+const STARE = sheetBuilder({library: RAW}).key('sit', 10).put('three', 2).key('cam', 22).hold('cam', 16, {boil: 3, every: 4, keep: ['eye/l', 'eye/r']})
+  .mark('blink').put('camshut', 10).hold('cam', 40, {boil: 3, every: 4, seed: 4, keep: ['eye/l', 'eye/r']}).build();
+function cutaway(c, t) {
+  paper(c, PAPER, null, 11);
+  const push = sm(.8, 4.5, t, easeInOutSine);
+  c.save(); cam(c, lerp(1110, 1090, push), lerp(560, 500, push), lerp(1.12, 1.32, push));
+  drawCel(c, DROOM, OPT);
+  c.save(); c.translate(1334, 700); drawCel(c, DMUG, OPT); drawCel(c, STEAM[Math.floor(t * 6) % 3], {...OPT, value: .9}); c.restore();
+  const q = STARE.at(Math.min(t, STARE.duration - 1 / 24)); c.save(); c.translate(1030, 700); drawCel(c, q.drawing, OPT); c.restore();
+  c.restore();
+}
+// gravity: swipe, slide, tip, fall, shatter. Physics on ones.
+const SWIPE = .42, V0 = 1.1, DEC = .9, G = 5.2;
+const tEdge = (V0 - Math.sqrt(V0 * V0 - 2 * DEC * (TABLE.z1 - (5.38 + NUDGE_Z)))) / DEC, VE = V0 - DEC * tEdge;
+const tFloor = Math.sqrt(2 * TABLE.top / G), tCrash = SWIPE + tEdge + tFloor;
+function mugFall(t) {
+  const z0 = 5.38 + NUDGE_Z, u = t - SWIPE;
+  if (u < 0) return {x: .56, y: TABLE.top, z: z0, rot: 0};
+  if (u < tEdge) return {x: .56, y: TABLE.top, z: z0 + V0 * u - DEC * u * u / 2, rot: 0};
+  const v = u - tEdge; if (v > tFloor) return {gone: true};
+  return {x: .56, y: TABLE.top - G * v * v / 2, z: TABLE.z1 + VE * v, rot: Math.min(4 * v + 6 * v * v, 2.4)};
+}
+const SHARDS = Array.from({length: 11}, (_, i) => ({a: i / 11 * TAU + hash(i, 1), v: .35 + hash(i, 2) * .55, up: .6 + hash(i, 3) * .9, s: .012 + hash(i, 4) * .018, spin: (hash(i, 5) - .5) * 20}));
+function gravity(c, t) {
+  paper(c, PAPER, null, 11);
+  const lean = sm(.55, 1.5, t, easeInOutSine), up = sm(4.0, 4.9, t, easeInOutSine);
+  const camz = lerp(TCAM.z, TABLE.z1 + .06, lean), camy = lerp(TCAM.y, TABLE.top + .16, lean), impact = [.56, 0, TABLE.z1 + VE * tFloor];
+  // the head goes out over the edge; the eyes follow the mug with a little lag, then stay on the mess, then lift at the footsteps
+  const aimAt = tt => { const q = mugFall(tt), tgt = q.gone ? impact : [q.x, q.y, q.z]; return Math.atan2(tgt[1] - camy, tgt[2] - camz) + .12; };
+  const follow = sm(SWIPE + tEdge - .15, SWIPE + tEdge + .1, t, easeInOutSine), pitch = lerp(lerp(TCAM.pitch, -.55, lean), aimAt(Math.max(0, t - .06)), follow * (1 - up)) + up * .5 * (1 - follow * 0);
+  const m = mugFall(t);
+  const pr = room(c, {x: TCAM.x, y: camy, z: camz, pitch}, {t, mug: m.gone || m.rot ? null : m, steam: t < SWIPE,
+    extra: (pr, d2) => [{d: -1e6, draw: () => {
+      if (!m.gone && m.rot) drawMug(c, pr, m, t, false);
+      const b = t - tCrash; if (b < 0) return;
+      // tea on the floor, shards skidding out, and a burst
+      const r = .05 + .16 * easeOut(clamp(b / .35, 0, 1)), tea = Array.from({length: 24}, (_, i) => { const a = i / 24 * TAU; return [impact[0] + Math.cos(a) * r * (1 + .25 * noise1(i * .7, 9)), .003, impact[2] + Math.sin(a) * r * .8 * (1 + .25 * noise1(i * .7 + 5, 9))]; });
+      wpoly(c, pr, tea, '#b8905f', .45); wline(c, pr, [...tea, tea[0]], {w: 1.1, a: .55, seed: 400, step: .01});
+      for (const [i, s] of SHARDS.entries()) {
+        const tt = Math.min(b, .6), x = impact[0] + Math.cos(s.a) * s.v * tt, z = impact[2] + Math.sin(s.a) * s.v * tt, y = Math.max(0, s.up * tt - G * tt * tt / 2);
+        const p = pr(x, y, z); if (!p) continue; const k = s.s * FOC / p[2], a = s.spin * tt;
+        c.save(); c.translate(p[0], p[1]); c.rotate(a); c.fillStyle = PAPER; c.strokeStyle = INK; c.lineWidth = 1.5; c.beginPath(); c.moveTo(-k, k * .5); c.lineTo(k * .2, -k); c.lineTo(k, k * .7); c.closePath(); c.fill(); c.stroke(); c.restore();
+      }
+      if (b < .35) { const p = pr(...impact); if (p) { c.save(); c.strokeStyle = INK; c.lineCap = 'round'; for (let i = 0; i < 9; i++) { const a = -Math.PI * (i / 8), r0 = 40 + b * 200, r1 = 110 + b * 420; c.globalAlpha = .8 * (1 - b / .35); c.lineWidth = 3; c.beginPath(); c.moveTo(p[0] + Math.cos(a) * r0, p[1] + Math.sin(a) * r0 * .6); c.lineTo(p[0] + Math.cos(a) * r1, p[1] + Math.sin(a) * r1 * .6); c.stroke(); } c.restore(); } }
+    }}]});
+  // the swipe: wind up, strike on ones, follow through over the edge
+  const tip = pr(.54, TABLE.top + .03, 5.38 + NUDGE_Z - .04);
+  const reach = t < SWIPE ? key(twos(t), [[0, 0], [.25, .45], [.34, .35]], easeInOutSine) : key(t, [[SWIPE, .35], [SWIPE + .07, 1.15], [SWIPE + .5, 1.1], [1.4, .2], [1.8, 0]], easeOut);
+  if (reach > 0 && tip) paw(c, lerp(CX - 60, tip[0], reach), lerp(H + 220, tip[1] + 30, reach) - Math.sin(Math.PI * Math.min(1, reach)) * 50, lerp(1.1, .6, Math.min(1, reach)), lerp(0, .3, Math.min(1, reach)));
+  if (lean > .3) { const k = sm(.3, .7, lean); paw(c, CX - 160, H + 200 - 260 * k, 1.15, .1); paw(c, CX + 160, H + 200 - 260 * k, 1.15, -.1); }
+  if (t > SWIPE && t < SWIPE + .12) speed(c, .5, 700 + Math.floor(t * 24), 'h');
+  caption(c, 'gravity: confirmed.', t, tCrash + .7, {y: 180});
+}
+// escape: a sprint to the sofa, then the view from underneath
+const RUN = 2.4;
+function escape(c, t) {
+  paper(c, PAPER, null, 11);
+  if (t < RUN) {
+    const u = sm(0, RUN, t, u => u * u * (1.6 - .6 * u)), x = lerp(.5, -1.45, u), ph = x / -.16 * 2, duck = sm(.6, 1, u);
+    room(c, {x, y: lerp(.2, .1, duck) + Math.abs(Math.sin(ph * Math.PI)) * .01 * (1 - duck), z: 5.9 + Math.sin(ph) * .01, yaw: -Math.PI / 2, pitch: .08 - .06 * duck}, {t, mug: null});
+    speed(c, .35, 900 + Math.floor(twos(t) * 12), 'h');
+    if (duck < .9) stepPaws(c, walkZ(0) + t * 7, 1.3, 180);
+  } else {
+    const u = t - RUN; underSofa(c, u, t);
+    caption(c, 'not me.', t, RUN + 1.9, {y: H - 210});
+  }
+}
+const SLIP = [[0, .4], [.45, -.15], [.9, -.7], [1.35, -1.2], [1.6, -1.5]];
+function underSofa(c, u, t, close = 0) {
+  const sx = key(twos(u), SLIP, easeInOutSine), step = (i) => Math.max(0, Math.sin((twos(u) * 2.2 + i) * Math.PI)) * .03 * (1 - sm(1.3, 1.6, u));
+  const pr = room(c, {x: -2.1, y: .05, z: 6.0, yaw: Math.PI / 2, pitch: -.02, hy: H * .52}, {t, mug: null, table: true,
+    extra: (pr) => [{d: -1e6, draw: () => {
+      for (const [i, dz] of [[0, -.09], [1, .09]]) { const lead = i ? .05 : 0, p = pr(sx - lead, step(i), 6.0 + dz); if (!p) continue; const s = FOC / p[2] * .0005;
+        c.save(); c.translate(p[0], p[1]); c.scale(s, s); drawCel(c, SLIPPER, {...OPT, weight: OPT.weight / Math.sqrt(s)}); c.restore(); }
+    }}]});
+  // the sofa's skirt and fringe frame the top of the view
+  c.save(); resetT(c); c.fillStyle = '#3b332d'; c.globalAlpha = .94; c.beginPath(); c.moveTo(0, 0); c.lineTo(W, 0); c.lineTo(W, 230); c.bezierCurveTo(W * .7, 250, W * .3, 244, 0, 236); c.closePath(); c.fill();
+  c.strokeStyle = '#3b332d'; c.lineCap = 'round'; for (let i = 0; i < 44; i++) { const x = i * W / 43 + (hash(i, 7) - .5) * 8, y0 = 232 + Math.sin(i * .3) * 4; c.globalAlpha = .9; c.lineWidth = 3; c.beginPath(); c.moveTo(x, y0); c.lineTo(x + (hash(i, 8) - .5) * 6, y0 + 36 + hash(i, 9) * 20); c.stroke(); }
+  const vg = c.createRadialGradient(CX, H * .6, H * .2, CX, H * .6, H * .75); vg.addColorStop(0, 'rgba(42,36,32,0)'); vg.addColorStop(1, 'rgba(42,36,32,.55)'); c.fillStyle = vg; c.globalAlpha = 1; c.fillRect(0, 0, W, H); c.restore();
+}
+function nap(c, t) {
+  paper(c, PAPER, null, 11);
+  underSofa(c, 2.7 + t, 52 + t);
+  lids(c, 1 - sm(.4, 2.4, twos(t), easeInOutSine));
+  caption(c, 'nap.', t, .9, {y: H - 210});
+}
+function endcard(c, t) {
+  paper(c, PAPER, null, 11);
+  const d = twos(t);
+  c.save(); resetT(c); c.translate(CX - 44, 700); c.scale(1.25, 1.25); drawCel(c, compileCel(RAW.camshut, {id: 'endcat'}), {...OPT, reveal: sm(0, 1.4, d, x => x)}); c.restore();
+  caption(c, "a cat's journey", t, .9, {y: 260, size: 104, rot: -.03});
+  caption(c, 'drawn in code by an AI agent', t, 1.8, {y: 930, size: 50, rot: 0});
+  caption(c, 'that checks its own animation', t, 2.2, {y: 1000, size: 50, rot: 0});
+  caption(c, 'github.com/anzal1/hand-drawn-film', t, 2.8, {y: 1150, size: 40, rot: 0});
+}
+
+// ---------- the film ----------
+const SHOTS = [['wake', 4.6, wake], ['patrol', 7, patrol], ['look up', 4, lookup], ['jump', 2.4, jump], ['investigate', 5.2, investigate],
+  ['cutaway', 5.2, cutaway], ['gravity', 5.6, gravity], ['escape', 5.6, escape], ['nap', 3.2, nap], ['end', 5, endcard]];
+const START = {}; { let a = 0; for (const [n, d] of SHOTS) { START[n] = a; a += d; } }
+
+function score(ac, t0, out) {
+  const bus = ac.createGain(); bus.gain.value = .85; bus.connect(out);
+  const at = (shot, s) => START[shot] + s;
+  // a purr: low tone with a slow pulse, under the waking
+  const o = ac.createOscillator(), g = ac.createGain(), lfo = ac.createOscillator(), lg = ac.createGain();
+  o.type = 'triangle'; o.frequency.value = 52; lfo.frequency.value = 24; lg.gain.value = .05; lfo.connect(lg); lg.connect(g.gain);
+  g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(.06, t0 + 1); g.gain.linearRampToValueAtTime(.05, t0 + 3.5); g.gain.linearRampToValueAtTime(0, t0 + 4.6);
+  o.connect(g); g.connect(bus); o.start(t0); lfo.start(t0); o.stop(t0 + 4.7); lfo.stop(t0 + 4.7);
+  // a sparse music box that walks with the cat
+  const tune = [0, 2, 4, 7, 4, 2, 9, 7, 4, 2, 0, 4];
+  for (let i = 0; i < 26; i++) note(ac, bus, pentHz(1, tune[i % tune.length] > 4 ? 3 : 1 + (i % 3), 330), t0, at('patrol', .2) + i * .56, .5, 'sine', .045);
+  for (let i = 0; i < 22; i++) noiseBurst(ac, bus, t0, at('patrol', .3 + i * .3), .03, .025, 50 + i);     // soft pads on floorboards
+  note(ac, bus, 660, t0, at('look up', 2.6), .5, 'sine', .07); note(ac, bus, 880, t0, at('look up', 2.8), .6, 'sine', .06);
+  noiseBurst(ac, bus, t0, at('jump', .6), .3, .12, 61); note(ac, bus, 330, t0, at('jump', .88), .2, 'triangle', .14);
+  note(ac, bus, 520, t0, at('investigate', TAP), .09, 'triangle', .22); noiseBurst(ac, bus, t0, at('investigate', TAP + .02), .18, .05, 62);
+  note(ac, bus, 247, t0, at('cutaway', 1.2), .6, 'sine', .08); note(ac, bus, 220, t0, at('cutaway', STARE.time('blink') + .1), .9, 'sine', .08);
+  noiseBurst(ac, bus, t0, at('gravity', SWIPE), .12, .14, 63);
+  const w = ac.createOscillator(), wg = ac.createGain(), tf = at('gravity', SWIPE + tEdge), tc = at('gravity', tCrash);
+  w.type = 'sine'; w.frequency.setValueAtTime(1150, t0 + tf); w.frequency.exponentialRampToValueAtTime(260, t0 + tc);
+  wg.gain.setValueAtTime(0, t0 + tf); wg.gain.linearRampToValueAtTime(.06, t0 + tf + .05); wg.gain.linearRampToValueAtTime(0, t0 + tc); w.connect(wg); wg.connect(bus); w.start(t0 + tf); w.stop(t0 + tc + .05);
+  noiseBurst(ac, bus, t0, tc, .6, .5, 64); for (let k = 0; k < 8; k++) note(ac, bus, pentHz(2 + (k % 2), k * 3), t0, tc + .03 + k * .045, .25, 'triangle', .07);
+  for (let k = 0; k < 4; k++) note(ac, bus, 70, t0, at('gravity', 4.2 + k * .5), .18, 'sine', .22);          // somebody is coming
+  for (let k = 0; k < 14; k++) noiseBurst(ac, bus, t0, at('escape', k * .19), .025, .04, 70 + k);          // scrabbling paws
+  for (let k = 0; k < 4; k++) note(ac, bus, 64, t0, at('escape', RUN + .2 + k * .45), .2, 'sine', .26);
+  note(ac, bus, 392, t0, at('escape', RUN + 1.9), .25, 'sine', .07); note(ac, bus, 370, t0, at('escape', RUN + 2.15), .35, 'sine', .06);
+  [0, 4, 7, 11].forEach((st, k) => note(ac, bus, 262 * Math.pow(2, st / 12), t0, at('nap', .6 + k * .12), 2.4, 'sine', .04));
+  [0, 4, 7].forEach((st, k) => note(ac, bus, 330 * Math.pow(2, st / 12), t0, at('end', .9 + k * .1), 2.2, 'sine', .045));
+}
+defineFilm({palette:{...PALETTES.pencilMinimal, paper:PAPER}, format:{ar:'4:5', width:1080}, fps:24, score,
+  timeline: SHOTS.map(([name, dur, fn]) => ({name, dur, fn}))});
+</script>
