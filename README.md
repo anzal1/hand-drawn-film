@@ -1,4 +1,48 @@
-# hand-drawn-canvas-animation
+# hand-drawn-film
+
+An agent skill for short films drawn and animated in JavaScript on Canvas 2D: pencil, ink,
+risograph, screen print, doodles on photos, sand and pop-up paper, exported to MP4 with a
+synthesized score. A polished fork of Alexey Fateev's
+[hand-drawn-canvas-animation](https://github.com/alesha-pro/tools/tree/main/skills/hand-drawn-canvas-animation)
+(MIT), rebuilt around one idea: an agent cannot watch its film, so give it instruments that turn
+motion into stills and numbers, and make the drawing tools good enough that what it sees is worth
+fixing.
+
+![A cat, a mug, a table: SVG-authored whole drawings, draw-on, paper fills, boiling holds](assets/preview-cat-and-mug.jpg)
+
+## What is new in this version
+
+| | upstream | this version |
+|---|---|---|
+| motion review | contact grid and strips only | `review.mjs` motion report (pops, A-B-A flicker, paper shimmer, blank and frozen stretches, faint lines, pacing, ones/twos per scene) and `--onion` skins with a spacing trail |
+| grid thumbnails | one-step downscale drops thin lines, so a correct frame looks broken | progressive downscale; thumbnails match the frames |
+| full render | one browser page | parallel browser processes, bit-identical output (60 s film: 86 s to 25 s) |
+| script errors | 60 s timeout, then a stack trace | fails in under a second with the page error |
+| drawing | point lists typed by hand | `svgCel` from SVG path data (M L H V C S Q T A Z) with resampling for morphable keys |
+| occlusion | lines show through bodies | per-stroke `fill: 'paper'` in painter's order |
+| draw-on | none for cels | `drawCel(..., {reveal})` paced by stroke length |
+| living line | no helper | `boilCels` with pinned endpoints and `keep` for eyes and contacts |
+| exposure sheets | hand-rolled per film | `sheetBuilder`: drawing library, spacing charts, boiling holds, marks for sound cues |
+| legibility | pencil study measures 69/255 line contrast at thumbnail size | `weight` / `value`; the new study measures 127 |
+| new project | copy five files, fix script paths by hand | `scripts/new.mjs` scaffolds a working starter film |
+| verify suite | hangs on the interactive workshop page | 20 checks pass in about 11 s |
+| guidance | long lists of cautions | a build-and-review loop, [craft numbers](references/craft.md), [review guide](references/review.md) |
+
+All upstream examples still render; the default brush output is pixel identical.
+
+## Quick start
+
+```bash
+node scripts/new.mjs ~/films/hop --ar 16:9 --look pencil
+cd ~/films/hop && npm i --no-audit --no-fund
+node render.mjs film.html --grid 24            # composition
+node render.mjs film.html --onion 74,36,2      # the jump as one image
+node review.mjs film.html                      # motion report
+node render.mjs film.html                      # mp4 with score
+```
+
+## Original README (upstream)
+
 
 An agent skill for films drawn and animated in JavaScript on Canvas 2D.
 An HTML player loads local drawing and timeline modules. Headless Chrome
@@ -91,7 +135,15 @@ Inspect the actual encoded action before judging its drawing or timing.
 
 | path | what it is |
 |---|---|
-| [`SKILL.md`](SKILL.md) | the procedure the agent follows, the rules, the review checklist |
+| [`SKILL.md`](SKILL.md) | the procedure: scaffold, draw, animate, review, deliver |
+| [`assets/sketch.js`](assets/sketch.js) | SVG path drawings, boil variants, spacing charts, sheet builder, sprite cache |
+| [`assets/starter-film.html`](assets/starter-film.html) | the template `new.mjs` turns into a working film |
+| [`examples/cat-and-mug.html`](examples/cat-and-mug.html) | 12.5 s pencil gag built with sketch.js, with score |
+| [`scripts/review.mjs`](scripts/review.mjs) | the motion report |
+| [`scripts/new.mjs`](scripts/new.mjs) | project scaffolder |
+| [`references/craft.md`](references/craft.md) | timing, spacing, line and composition numbers |
+| [`references/sketch.md`](references/sketch.md) | sketch.js API |
+| [`references/review.md`](references/review.md) | reading onions and review findings |
 | [`assets/core.js`](assets/core.js) | the core: colour maths and palettes, four finishes, marks, lattices, motifs, reveals, photos and doodles, camera, timeline, score plumbing, player |
 | [`assets/cels.js`](assets/cels.js) | whole stroke drawings, finite exposure sheets, compatible inbetweens, graphite and ink brushes |
 | [`examples/sketchbook-bird.html`](examples/sketchbook-bird.html) | primary redrawn pencil/ink study, 6 s, nine whole-body keys, no joint rig |
@@ -128,7 +180,7 @@ Inspect the actual encoded action before judging its drawing or timing.
 User scope:
 
 ```bash
-cp -r hand-drawn-canvas-animation ~/.agents/skills/
+cp -r hand-drawn-film ~/.claude/skills/   # or ~/.agents/skills/
 ```
 
 If your agent reads skills from another directory, copy the folder there.

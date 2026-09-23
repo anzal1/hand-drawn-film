@@ -68,6 +68,14 @@ feed the output frame number into every stroke seed to manufacture liveliness.
 Paper stays registered to its chosen surface. Excessive grain can hide the line
 in the compressed delivery even when a large PNG looks attractive.
 
+## Authoring with sketch.js
+
+Typing point lists by hand is the slowest and least accurate way to draw. `sketch.js` builds the
+same raw cels from SVG path data, resamples strokes for morphing, adds boiling holds and an
+exposure-sheet builder. Read [sketch.md](sketch.md); the worked example is
+[`cat-and-mug.html`](../examples/cat-and-mug.html). `drawCel` also takes `weight`, `value`,
+`reveal` and per-stroke `fill`.
+
 ## Cel API
 
 Load `core.js`, `studio.js`, then `cels.js`. Geometry uses the core's logical

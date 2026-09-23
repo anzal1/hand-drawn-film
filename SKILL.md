@@ -1,156 +1,146 @@
 ---
-name: hand-drawn-canvas-animation
+name: hand-drawn-film
 description: >-
-  Create hand-drawn short films with whole-pose drawings, expressive strokes and intentional exposure in JavaScript and Canvas 2D: ink, pencil, risograph, screen print, or brush-pen doodles on photos. Includes performance animation, real-motion tracing, sand animation and pop-up paper. Use for hand-drawn cartoons, animated explainers, procedural films, rotoscope, sand stories or drawings interacting with objects. Not for UI animation or slide decks.
+  Make short hand-drawn films in JavaScript and Canvas 2D (pencil, ink, risograph, screen print,
+  brush-pen doodles on photos, sand animation, pop-up paper) and export an MP4 with a synthesized
+  score. Whole-pose drawings authored as SVG path data, exposure sheets, draw-on reveals, boiling
+  holds, and a review loop (onion skins, motion report) that lets you judge animation without
+  watching it. Use for hand-drawn cartoons, animated explainers, sketch-style intros, rotoscope,
+  sand stories or drawings that interact with photos. Not for UI animation or slide decks.
 ---
 
-# Hand-drawn canvas animation
+# Hand-drawn film
 
-Produce a film that feels drawn by hand in both its marks and its movement.
-For character animation, default to whole-pose drawings, expressive strokes and
-intentional exposure. Design the keys and breakdowns before any rig or texture.
-A rig may guide construction and contacts; the final drawing must carry the pose.
-Canvas 2D is the renderer; SVG path data may be used for authored shapes. No
-Blender or video model is needed. WebGL is not a dependency. Deliver an HTML
-film with its local modules and an offline MP4. Length and format follow the
-brief; a short, finished action is the starting point for a longer film.
+You are making a film that must feel drawn by hand in its marks **and** its movement. You cannot
+watch playback, so this skill gives you instruments that turn motion into stills and numbers.
+Use them after every change. The loop is the method:
 
-## Choose the right references
+```
+draw keys -> render one still -> build the exposure sheet -> onion / strip the hard action
+-> review.mjs -> fix -> full render -> review.mjs on the final -> deliver with limitations
+```
 
-- Read [style.md](references/style.md) for the five looks and their quality gates.
-- For a film combining looks or techniques, read
-  [mixed-media.md](references/mixed-media.md). Plan why the material changes and
-  what carries through the transition before drawing separate style samples.
-- Read [redrawn-animation.md](references/redrawn-animation.md) for the default
-  stroke-led character workflow, whole cels, assisted inbetweens and exposure sheets.
-- Read [motion.md](references/motion.md) before animating characters or a camera.
-- Read [studio.md](references/studio.md) for exposure tracks, stable strokes,
-  contact IK and materials for optional deformation and construction helpers.
-- Read [architecture.md](references/architecture.md) for core APIs and export.
-- Read [doodle.md](references/doodle.md) for photo sourcing, anchors and masking;
-  [found-motion.md](references/found-motion.md) for traced movement;
-  [sand.md](references/sand.md) or [paper3d.md](references/paper3d.md) for those media.
-- [palettes.md](references/palettes.md), [scenes.md](references/scenes.md) and
-  [reference-films.md](references/reference-films.md) contain optional palettes,
-  scene devices and historical references. They are not mandatory film structures.
+## 1. Start a project (1 minute)
 
-## Workflow
+```bash
+node <skill>/scripts/new.mjs ~/films/my-film --ar 16:9 --look pencil --title "My film"
+cd ~/films/my-film && npm i --no-audit --no-fund
+node render.mjs film.html --grid 24
+```
 
-1. Fill [brief-template.md](references/brief-template.md). Infer routine choices;
-   ask only for missing decisions that materially affect the result. Specify the
-   intended material and acting reference separately. Pick a primary aspect ratio;
-   alternate formats need composition review, not just a different canvas size.
-2. Create one project folder. Copy `assets/core.js`, `assets/studio.js`,
-   `assets/cels.js`, optional `assets/materials.js`, `scripts/render.mjs` and
-   `scripts/package.json` into it. For characters, study
-   `examples/sketchbook-bird.html` and build an original cast with whole drawings.
-   Its example imports use `../assets/`; change these to local module paths in a
-   standalone project. `assets/film-template.html` is a legacy rig demonstration,
-   useful for runtime wiring, not the default visual model. Install the local
-   renderer dependencies with `npm i --no-audit --no-fund`; system Chrome and ffmpeg
-   are required. Keep reusable engine edits in the skill, not in film copies.
-3. Establish the drawing: silhouette, proportions, expressions, necessary views,
-   line hierarchy, recognizable stroke gestures and a few material samples. Render at delivery size and at
-   240 px. A material cannot rescue an unclear pose. Use designed curves and
-   replacement drawings where simple primitives fail.
-4. Plan the keys and breakdowns of the hardest action. Mark contacts, gaze,
-   anticipation, weight transfer and reaction. Use enough controls to express it;
-   there is no fixed part count or parameter limit. Build a finite exposure sheet
-   of whole drawings. Use geometric inbetweens only for corresponding forms;
-   redraw changed overlaps, head angles, compressed silhouettes and expressions.
-   Establish timing without decorative textures first. Do not add springs to rigid or motor-driven motion.
-5. Finish one representative production shot before building the whole film.
-   Evaluate normal-speed playback, consecutive-frame strips and stills. Correct
-   anatomy, spacing, contacts and line stability before adding more scenes.
-6. Build the remaining shots using a beat sheet: start, duration, what the viewer
-   notices, main action, camera and sound cue. Cuts, transitions, blueprint views,
-   montages, anchors and sign-offs are artistic choices. Give each action time to
-   read. When mixing materials, carry the character's action, position or a
-   physical object across the change. A palette swap alone does not establish
-   a new style; several impressive but disconnected shots do not establish a story.
-7. Render and inspect. Start with `--grid 24`, then use `--strip 48,12` around
-   a fast action or contact, and `--only 48` for full-size detail. Run the full
-   renderer for the MP4 and generated score. A contact sheet alone cannot pass
-   motion QA. If playback is unavailable, explicitly report that limitation.
-8. Deliver the source, dependencies/assets, MP4, contact sheet and the remaining
-   known limitations. Verify duration, dimensions, frame count and successful
-   decode. Never call a film studio-quality solely because its code or checklist
-   passed; assess the actual result against the chosen visual reference.
+`film.html` is a complete, working starter (a ball hops onto a box) with the canonical structure:
+drawings, one exposure sheet, the shot, a score whose cues read the sheet. Keep the structure,
+replace the drawings. Fill `brief.md` first; infer routine choices, ask the user only about
+decisions that change the film (subject, length, look, format, ending). Needs Node 22+, Chrome,
+ffmpeg. For looks other than pencil/ink, or photos, sand and paper, start from the matching
+example in `examples/` (table below) and copy its modules locally.
 
-## Production invariants
+## 2. Draw (the part that decides quality)
 
-- `defineFilm` defaults to **24 fps**. A scene receives continuous `tau`; `i`
-  remains the legacy 12 Hz index for `pulse`, `boil` and older clips. Use exposure
-  tracks per action. Ones, twos, threes and held drawings are all valid.
-- Separate camera timing, drawing exposure and root motion. Check their combined
-  screen-space motion, especially in a tracking shot. Avoid quantizing twice.
-- Randomness is seeded. Make strokes once per drawing, with stable semantic ids.
-  A held drawing holds its marks too. Seed changes belong to a new drawing, not
-  every output frame. In a deformation workflow, use stable rest-space marks. Specify
-  whether a texture belongs to the paper, an object or the screen. A fixed seed
-  does not prevent swimming if sampling positions or topology change.
-- Each frame must reproduce after seeking in the same pinned runtime. Sand uses
-  fixed-step simulation and bounded checkpoints. Font and browser differences
-  can change pixels between machines; provide fonts or use path lettering when
-  reproducibility matters. Allow fonts and photos to load before export.
-- Preserve physical contacts until their planned release. IK clamps unreachable
-  targets; check the returned error and fix the pose rather than stretching bones.
-- Record sources/licences for external media. Use only assets permitted for the
-  intended delivery. Optional SVG is path geometry, not automatic rigging.
+Author each key pose as a **whole drawing** in SVG path data with `svgCel` (see
+[redrawn-animation.md](references/redrawn-animation.md) and [sketch.md](references/sketch.md)).
+
+- Same stroke names in every key; start each stroke at the same landmark; pass `points: N` so
+  `inbetweenCel` matches strokes by arc length. A new view, a closed eye or a changed overlap is
+  a **replacement drawing** (`put`), never a morph.
+- Give closed forms `fill: 'paper'` so a front shape hides the lines behind it. Stroke order is
+  painter's order: background first, near limbs last. Add an invisible silhouette
+  (`opacity: 0, fill: 'paper'`) first when a body is built from open strokes.
+- Line weight: pencil `weight 1.8-2.2, value 1.3`; ink `weight 1.1-1.3`. Weight is judged at
+  thumbnail size, not full size. Target ink contrast 110+ in the review table.
+- Render each key alone (`?pose=` pattern in `examples/cat-and-mug.html`) and look at them side by
+  side before animating. A texture never rescues an unclear silhouette.
+- Composition: subject in the middle 60% of the frame, horizon or table around 60-65% down,
+  nothing important within 5% of an edge. Frame with `cam()` rather than moving every drawing.
+- **Call `setFormat()` before any file-scope constant reads `W`, `H`, `CX`, `CY`.** `defineFilm()`
+  runs last; without this the film is laid out on the 1:1 default (the starter shows the pattern).
+
+## 3. Animate (exposure sheet)
+
+Use `sheetBuilder({library: RAW})`: `key`, `between(a, b, spacing(n, kind), frames)`, `hold`
+(optionally `{boil: 3, every: 4}`), `put` for replacements, `mark('name')` for cues. Numbers
+that work at 24 fps are in [craft.md](references/craft.md). The short version:
+
+- Moves on twos; fast actions (a swipe, a hit, a fall) on ones; holds 8-24 frames, boiling on
+  fours with `keep` for eyes and contacts. Never boil on ones.
+- Spacing is the acting: `slowInOut` for most moves, `slowIn` into a landing or a look,
+  `slowOut` out of a crouch into a throw or fall, `even` only for machines and ballistics along
+  the horizontal.
+- Anticipation 4-8 frames before any fast action; a settle after it. Give the viewer about
+  one second to read a new idea before the next one starts.
+- Props with physics (a falling mug) use formulas on continuous time, not keys. Cue sound from
+  marks (`film.time('contact')`) so it cannot drift.
+
+## 4. Look at the motion (every iteration)
+
+```bash
+node render.mjs film.html --grid 24          # composition across the film (faithful thumbnails)
+node render.mjs film.html --onion 96,16      # one action overlaid blue->red, with a spacing trail
+node render.mjs film.html --strip 96,12      # consecutive frames at readable size
+node render.mjs film.html --only 96          # one full-size frame for line detail
+node review.mjs film.html                    # motion report: pops, flicker, shimmer, blank,
+                                             # frozen, faint lines, pacing, exposure per scene
+```
+
+Read [review.md](references/review.md) for how to interpret each finding. In an onion, the dots
+are the ink centroid per frame: evenly spaced dots are even spacing, bunched dots are a slow in or
+out, a straight chain on a jump means the arc is missing. Fix every `warn` or state why it is
+intended; confirm each finding by eye with `--strip` around the frame. The numbers are
+measurements, not taste.
+
+## 5. Deliver
+
+```bash
+node render.mjs film.html                    # frames, mp4, contact sheet, -final.mp4 with score
+node review.mjs film.html                    # on the finished film
+```
+
+Full renders run on parallel browser processes (`--jobs N`) and are bit-identical to serial
+renders. Deliver the source folder, the MP4, the contact sheet, the review report and a short
+list of known limitations. Verify duration, dimensions and frame count (ffprobe). Never call a
+film finished because code or checks passed; say what you looked at (onions, strips, stills) and
+that you did not watch it at speed if you could not.
+
+## Choose references by task
+
+| task | read | start from |
+|---|---|---|
+| any character in pencil or ink | [redrawn-animation.md](references/redrawn-animation.md), [sketch.md](references/sketch.md), [craft.md](references/craft.md) | `examples/cat-and-mug.html`, `examples/sketchbook-bird.html` |
+| timing, spacing, contacts, weather | [motion.md](references/motion.md), [craft.md](references/craft.md) | `examples/weight-study.html` |
+| looks: ink, pencil, riso, screen, doodle | [style.md](references/style.md), [palettes.md](references/palettes.md) | `examples/four-looks.html` |
+| several looks in one film | [mixed-media.md](references/mixed-media.md) | `examples/becoming-phoenix/` |
+| drawings on real photos | [doodle.md](references/doodle.md) | `examples/held-once.html`, `examples/night-shift.html` |
+| traced real motion | [found-motion.md](references/found-motion.md) | `examples/gallop.html` |
+| sand animation | [sand.md](references/sand.md) | `examples/one-year.html` |
+| pop-up paper in 3D | [paper3d.md](references/paper3d.md) | `examples/moon-book.html` |
+| engine APIs, export, pitfalls | [architecture.md](references/architecture.md), [studio.md](references/studio.md) | |
+| reading review output | [review.md](references/review.md) | |
+
+[scenes.md](references/scenes.md) and [reference-films.md](references/reference-films.md) hold
+optional scene devices and historical references, not required structures.
+
+## Invariants
+
+- 24 fps by default. Scenes get continuous `tau`; quantize a pose once (`twos(t)` or an exposure
+  sheet), never twice. Camera and physics usually run on ones.
+- No output-frame seeds. A held drawing holds its marks; a boil is a finite set of drawings.
+  Every frame must reproduce after seeking (render workers depend on it).
+- Contacts stay planted until their planned release; IK clamps and reports unreachable targets.
+- Record sources and licences for external media (photos, fonts).
+- Engine edits belong in the skill's `assets/`, then get copied to films; do not fork `core.js`
+  inside one film.
 
 ## Quality gates
 
-**Drawing:** clear silhouette; consistent proportions across views; controlled
-outer/inner line weights; purposeful pressure, taper and gaps; no accidental
-tangencies or broken joints. Avoid assembled oval limbs with a texture laid over
-them. Clean curves and aligned fills remain valid for the selected medium, but
-the default sketch should retain visible drawing gestures. Wobble,
-misregistration and boil require a purpose.
+- **Drawing:** clear silhouette at 240 px; consistent proportions across keys; line hierarchy
+  (outer contour heavier than interior detail); purposeful taper and gaps; no accidental
+  tangents; front forms hide what is behind them.
+- **Motion:** readable keys, anticipation and settle where the action needs them, deliberate
+  spacing (check the onion), planted contacts, no pops or two-drawing flicker in the review.
+- **Material:** texture tied to the paper or object, not the screen; no shimmer unless intended;
+  line contrast 110+ at thumbnail size for line films.
+- **Delivery:** no page errors, no unintended blank frames, the ending holds 0.5-1.5 s, text and
+  cards stay up long enough to read (about 3 words per second plus one second), the encoded MP4
+  decodes and has the expected frame count.
 
-**Motion:** whole poses that feel redrawn, meaningful keys, readable breakdowns, deliberate spacing, convincing
-weight and planted contacts. Inspect overshoot, camera tracking, topology changes
-and fast movement at normal speed and frame by frame. Use a designed smear when
-needed; legacy `smear()` makes a ghost trail, not a new drawing.
-
-**Material:** ink hatching follows form; graphite respects pressure and tone;
-riso plates register coherently; screen ink may be solid; doodles interact with
-the photo. Avoid excessive grain, changing raster phase and unintended shimmer.
-For mixed-media work, inspect the transitions as actions, not only a style board.
-If weather drives the scene, its force should affect both setting and character.
-If paper unfolds, show a compact starting state, the hinges and an attached base.
-
-**Delivery:** no page errors, accidental blank frames, clipped action, stale
-frames or unfinished final lettering. If a closing card is requested, let it
-finish and hold long enough to read. Check the encoded video, not only PNGs.
-
-## Working examples and commands
-
-[`examples/becoming-phoenix/phoenix.html`](examples/becoming-phoenix/phoenix.html)
-is a complete 60-second film with original music. It combines all five looks,
-sand and paper projection through one story. Study `inkScene` for a moving
-storm, `ensurePrintedPage` for an actual print becoming a page, and
-`unfoldPhoenix` for staggered wing and tail opening. Its branding is specific
-to the example. Use the techniques that serve the new brief, not its shot list.
-
-`examples/sketchbook-bird.html` is the primary pencil/ink drawing study: nine
-whole-body keys, assisted inbetweens, a replacement blink and an exposure sheet.
-`examples/weight-study.html` is a secondary seven-second contact/weight study rendered in
-five looks with `--look ink|pencil|riso|screen|doodle`. It demonstrates mechanisms,
-not the aesthetic target for redrawn characters or proof of feature-film quality. `examples/material-studies.html` adds sand-displacement and page-curl close-ups. Earlier
-examples remain useful for particular scene devices; see their references above.
-
-```bash
-node scripts/render.mjs examples/sketchbook-bird.html --look pencil --grid 18 --out /tmp/pencil-preview
-node scripts/render.mjs examples/sketchbook-bird.html --strip 58,24 --out /tmp/motion-preview
-node scripts/render.mjs examples/sketchbook-bird.html --width 1920 --out /tmp/drawn-film
-node scripts/verify.mjs
-```
-
-The renderer honours the film's aspect ratio unless `--ar` is supplied. Each full
-render stages its own frames, then replaces that film's outputs after successful
-encoding. Old PNGs cannot extend a shorter revision. `--grid`, `--strip` and
-`--only` are preview modes and do not replace the full MP4.
-
-For Remotion integration use timebase conversion:
-`drawFrame(Math.min(__NDRAW - 1, Math.floor(frame * __fps / compositionFps)))`.
-With film and composition both at 24 fps this is simply `drawFrame(frame)`.
+`node scripts/verify.mjs` runs the engine's regression suite (20 checks) after engine edits.
