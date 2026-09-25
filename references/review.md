@@ -44,9 +44,10 @@ The per-scene table reports energy, the share of changes on ones/twos/threes and
 and contrast. A character film is usually mostly twos with some ones and holds; all ones often
 means a pose is being recomputed every frame.
 
-Calibration: on the 14 bundled films the report raises no false warnings; the ones it raised
-upstream were real (moon-book frame 615 drops the book's back page in a single frame; held-once
-frame 40 snaps a redraw). Still confirm each finding by eye.
+Calibration: on the 15 bundled films the report raised one warning, and it was real: moon-book frame
+615, where the book's front board lay flat beside the closing cover and vanished in one frame (fixed
+in `paper3d.js`). An earlier version misread held-once's 8-frame doodle boil as a pop; boil cycles
+are now detected from all periodic spikes in a scene. Still confirm each finding by eye.
 
 ## Limits
 

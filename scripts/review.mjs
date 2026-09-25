@@ -98,7 +98,13 @@ for (let i = 2; i < rows.length - 1; i++) {
 }
 // Spikes that recur at a fixed interval are a boil cycle, reported once per scene.
 for (const s of scenes) {
-  const inS = pops.filter(p => sceneOf(p.i) === s.name), gaps = inS.slice(1).map((p, k) => p.i - inS[k].i), per = median(gaps);
+  // A boil shows as whole-drawing spikes at a fixed period. Look for the period among all spikes in the
+  // scene, not only the pop candidates: motion between boil steps can hide most of them from the pop test.
+  const end = scenes[scenes.indexOf(s) + 1]?.start ?? N, sceneE = energy.slice(s.start + 1, end), base = median(sceneE.filter(v => v > .02)) || .02;
+  const spikes = []; for (let i = s.start + 2; i < end - 1; i++) if (energy[i] > .4 && energy[i] > base * 2.5 && energy[i] > energy[i - 1] * 2 && energy[i] > energy[i + 1] * 2) spikes.push(i);
+  const sg = spikes.slice(1).map((v, k) => v - spikes[k]), sper = median(sg), cycle = spikes.length >= 4 && sper >= 3 && sg.filter(g => g % sper === 0 && g <= sper * 3).length >= sg.length * .6;
+  const inS = pops.filter(p => sceneOf(p.i) === s.name && !(cycle && spikes.some(q => Math.abs(q - p.i) <= 1))), gaps = inS.slice(1).map((p, k) => p.i - inS[k].i), per = median(gaps);
+  if (cycle) add('info', 'boil', spikes[0], `scene "${s.name}": whole-drawing changes every ~${sper} frames (${(sper / fps).toFixed(2)} s), ${spikes.length} seen. A deliberate boil cycle reads as living line; unwanted, it reads as jitter.`);
   const periodic = inS.length >= 3 && gaps.filter(g => Math.abs(g - per) <= 1).length >= gaps.length * .6;
   if (periodic) add('info', 'boil', inS[0].i, `scene "${s.name}": ${inS.length} whole-drawing changes every ~${per} frames (${(per / fps).toFixed(2)} s). A deliberate boil cycle reads as living line; unwanted, it reads as jitter. Hold the drawing when nothing moves.`);
   else for (const {i, e, nb} of inS) add(e > nb * 8 ? 'warn' : 'info', 'pop', i, `frame ${i} changes ${(e / nb).toFixed(1)}x more than any frame within 4 of it (energy ${e.toFixed(2)}). A drawing that snaps, a layer popping on, or a missing inbetween.`);
